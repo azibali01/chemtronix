@@ -458,40 +458,36 @@ export default function SalesInvoicePage() {
       }
 
       const payload = {
+        computerNumber: newInvoiceNumber,
         invoiceNumber: newInvoiceNumber,
         invoiceDate: newInvoiceDate,
-        deliveryNumber: newDeliveryNumber,
-        deliveryDate: newDeliveryDate,
-        poNumber: newPoNumber,
-        poDate: newPoDate,
-        accountNumber: newAccountNumber,
+        deliveryNumber: newDeliveryNumber || undefined,
+        deliveryDate: newDeliveryDate || undefined,
+        poNumber: newPoNumber || undefined,
+        poDate: newPoDate || undefined,
+        account: newAccountNumber,
         accountTitle: newAccountTitle,
         saleAccount: newSaleAccount,
         saleAccountTitle: newSaleAccountTitle,
-        ntnNumber: newNtnNumber,
-        strnNumber: newStrnNumber,
-        amount: netTotal,
-        netAmount: netTotal,
-        province,
-        products: items.map((item) => ({
-          code: item.code,
-          productName: item.product,
-          hsCode: item.hsCode,
-          description: item.description,
-          quantity: item.qty,
-          rate: item.rate,
-          gstPercent:
-            brand !== "hydroworx"
-              ? getTaxRate(item.hsCode, province)
-              : 0,
-          exGstRate: item.rate,
-          exGstAmount: item.qty * item.rate,
-          netAmount:
-            item.qty * item.rate +
-            (brand !== "hydroworx"
-              ? (item.qty * item.rate * getTaxRate(item.hsCode, province)) / 100
-              : 0),
-        })),
+        ntnNumber: newNtnNumber || undefined,
+        strnNumber: newStrnNumber || undefined,
+        products: items.map((item) => {
+          const codeDigits = String(item.code || "").match(/\d+/)?.[0];
+          const numericCode = codeDigits ? Number(codeDigits) : Number(item.code);
+          const baseAmount = item.qty * item.rate;
+          const gstPercent = brand !== "hydroworx" ? getTaxRate(item.hsCode, province) : 0;
+          return {
+            code: numericCode,
+            productName: item.product,
+            hsCode: item.hsCode,
+            quantity: item.qty,
+            rate: item.rate,
+            gstPercent,
+            exGstRate: item.rate,
+            exGstAmount: baseAmount,
+            netAmount: baseAmount + (baseAmount * gstPercent) / 100,
+          };
+        }),
       };
 
       const response = await api.post("/sale-invoice", payload);
@@ -1721,7 +1717,7 @@ export default function SalesInvoicePage() {
                 }
               }}
               clearable
-              error={fieldErrors.accountNumber}
+              error={fieldErrors.accountNumber ?? fieldErrors.account}
             />
             <Select
               label="Account Title"

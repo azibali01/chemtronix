@@ -33,7 +33,7 @@ export function PrintableChallan({
   const secondaryColor = brand === "chemtronics" ? "#0A6802" : "#004499";
   const cellBorder: CSSProperties = {
     border: "1px solid #222",
-    padding: 4,
+    padding: 5,
   };
 
   return (
@@ -42,7 +42,7 @@ export function PrintableChallan({
       style={{
         fontFamily: "Arial, sans-serif",
         background: "#fff",
-        padding: "18px 20px",
+        padding: "12px 15px",
         width: "100%",
         maxWidth: "190mm",
         margin: "0 auto",
@@ -54,15 +54,15 @@ export function PrintableChallan({
       }}
     >
       {/* Header */}
-      <div style={{ textAlign: "center", marginBottom: 8 }}>
-        <img src={logoSrc} alt="Logo" style={{ height: 60 }} />
+      <div style={{ textAlign: "center", marginBottom: 4 }}>
+        <img src={logoSrc} alt="Logo" style={{ height: 40 }} />
         <h2
           style={{
             color: primaryColor,
-            margin: "8px 0",
-            fontSize: 28,
+            margin: "4px 0",
+            fontSize: 20,
             fontWeight: "bold",
-            letterSpacing: 2,
+            letterSpacing: 1,
           }}
         >
           Delivery Challan
@@ -96,8 +96,8 @@ export function PrintableChallan({
       <table
         style={{
           width: "100%",
-          fontSize: 12,
-          marginBottom: 16,
+          fontSize: 10,
+          marginBottom: 8,
           tableLayout: "fixed",
         }}
       >
@@ -242,8 +242,8 @@ export function PrintableChallan({
       <table
         style={{
           width: "100%",
-          fontSize: 12,
-          marginBottom: 16,
+          fontSize: 10,
+          marginBottom: 8,
           tableLayout: "fixed",
         }}
       >
@@ -305,8 +305,9 @@ export function PrintableChallan({
           width: "100%",
           borderCollapse: "collapse",
           border: "1px solid #222",
-          fontSize: 11,
-          marginBottom: 20,
+          fontSize: 10,
+          marginBottom: 12,
+          marginTop: 8,
           tableLayout: "fixed",
           pageBreakInside: "avoid",
         }}
@@ -441,12 +442,12 @@ export function PrintableChallan({
       </table>
 
       {/* Signatures — directly above invoice footer image */}
-      <div style={{ marginTop: 16, marginBottom: 8, pageBreakInside: "avoid" }}>
+      <div style={{ marginTop: 8, marginBottom: 4, pageBreakInside: "avoid" }}>
         <table
           style={{
             width: "100%",
-            fontSize: 12,
-            marginBottom: 16,
+            fontSize: 10,
+            marginBottom: 4,
             tableLayout: "fixed",
             pageBreakInside: "avoid",
           }}
@@ -457,7 +458,7 @@ export function PrintableChallan({
                 style={{
                   width: "33%",
                   textAlign: "center",
-                  paddingBottom: 12,
+                  paddingBottom: 8,
                 }}
               >
                 <span
@@ -465,7 +466,8 @@ export function PrintableChallan({
                     color: secondaryColor,
                     fontWeight: "bold",
                     borderBottom: "1px solid #222",
-                    paddingBottom: 2,
+                    paddingBottom: 1,
+                    fontSize: 9,
                   }}
                 >
                   Prepared By
@@ -475,7 +477,7 @@ export function PrintableChallan({
                 style={{
                   width: "33%",
                   textAlign: "center",
-                  paddingBottom: 12,
+                  paddingBottom: 8,
                 }}
               >
                 <span
@@ -483,7 +485,8 @@ export function PrintableChallan({
                     color: secondaryColor,
                     fontWeight: "bold",
                     borderBottom: "1px solid #222",
-                    paddingBottom: 2,
+                    paddingBottom: 1,
+                    fontSize: 9,
                   }}
                 >
                   Checked By
@@ -493,7 +496,7 @@ export function PrintableChallan({
                 style={{
                   width: "33%",
                   textAlign: "center",
-                  paddingBottom: 12,
+                  paddingBottom: 8,
                 }}
               >
                 <span
@@ -501,7 +504,8 @@ export function PrintableChallan({
                     color: secondaryColor,
                     fontWeight: "bold",
                     borderBottom: "1px solid #222",
-                    paddingBottom: 2,
+                    paddingBottom: 1,
+                    fontSize: 9,
                   }}
                 >
                   Manager
@@ -510,7 +514,7 @@ export function PrintableChallan({
             </tr>
           </tbody>
         </table>
-        <div style={{ margin: "16px 0", fontSize: 11 }}>
+        <div style={{ margin: "4px 0", fontSize: 8 }}>
           Please receive the above material and return duplicate of this challan
           duly received and signed for record
         </div>
@@ -519,8 +523,8 @@ export function PrintableChallan({
             textAlign: "right",
             fontWeight: "bold",
             color: secondaryColor,
-            fontSize: 12,
-            marginTop: 16,
+            fontSize: 10,
+            marginTop: 4,
             borderBottom: "1px solid #222",
             paddingBottom: 2,
           }}
@@ -530,9 +534,18 @@ export function PrintableChallan({
       </div>
 
       {/* Same footer image as sales invoice print */}
-      <div style={{ marginTop: 12, pageBreakInside: "avoid", width: "100%" }}>
+      <div
+        style={{
+          marginTop: 8,
+          marginBottom: 0,
+          pageBreakInside: "avoid",
+          width: "100%",
+        }}
+      >
         <img
-          src={getFooterImage(brand)}
+          src={
+            brand === "chemtronics" ? "/footer finl.jpg" : getFooterImage(brand)
+          }
           alt="Footer"
           style={{
             width: "100%",
