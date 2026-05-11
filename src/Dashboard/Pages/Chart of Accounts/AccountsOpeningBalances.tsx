@@ -17,6 +17,17 @@ import { useChartOfAccounts } from "../../Context/ChartOfAccountsContext";
 import { useAccountsOpeningBalances } from "../../Context/AccountsOpeningbalancesContext";
 import type { AccountNode } from "../../Context/ChartOfAccountsContext";
 
+/** Mantine NumberInput often emits `string` while typing; never coerce non-numbers to 0 or amounts drift to the wrong side. */
+function parseNumberInputValue(
+  val: string | number | null | undefined
+): number {
+  if (val === null || val === undefined || val === "") return 0;
+  if (typeof val === "number")
+    return Number.isFinite(val) ? val : 0;
+  const n = Number(String(val).replace(/,/g, ""));
+  return Number.isFinite(n) ? n : 0;
+}
+
 const flattenAccounts = (
   nodes: AccountNode[],
   level: number = 0
@@ -68,12 +79,16 @@ const AccountsOpeningBalances: React.FC = () => {
       const loadBalancesFromNodes = (nodes: AccountNode[]) => {
         nodes.forEach((node) => {
           const code = String(node.accountCode || node.selectedCode || "");
-          if (code && node.openingBalance) {
-            initialBalances[code] = {
-              debit: node.openingBalance.debit || 0,
-              credit: node.openingBalance.credit || 0,
-            };
-          }
+          if (!code) return;
+          // API stores opening on root `debit` / `credit`; some trees use nested `openingBalance`.
+          const raw = node as AccountNode & {
+            debit?: number;
+            credit?: number;
+          };
+          const debit = Number(node.openingBalance?.debit ?? raw.debit ?? 0) || 0;
+          const credit =
+            Number(node.openingBalance?.credit ?? raw.credit ?? 0) || 0;
+          initialBalances[code] = { debit, credit };
           if (node.children && node.children.length > 0) {
             loadBalancesFromNodes(node.children);
           }
@@ -121,14 +136,9 @@ const AccountsOpeningBalances: React.FC = () => {
 
     setUpdating(true);
 
-    // Send only the non-zero value to match backend logic
-    const payload: { debit?: number; credit?: number } = {};
-    if (modalDebit > 0) {
-      payload.debit = modalDebit;
-    }
-    if (modalCredit > 0) {
-      payload.credit = modalCredit;
-    }
+    const debit = parseNumberInputValue(modalDebit);
+    const credit = parseNumberInputValue(modalCredit);
+    const payload = { debit, credit };
 
     console.log("Updating single account:", {
       id: selectedAccount.id,
@@ -145,7 +155,7 @@ const AccountsOpeningBalances: React.FC = () => {
       // Update local state
       setBalances((prev) => ({
         ...prev,
-        [selectedAccount.code]: { debit: modalDebit, credit: modalCredit },
+        [selectedAccount.code]: { debit, credit },
       }));
 
       alert("Opening balance updated successfully!");
@@ -259,7 +269,7 @@ const AccountsOpeningBalances: React.FC = () => {
                           handleChange(
                             row.code,
                             "debit",
-                            typeof val === "number" ? val : 0
+                            parseNumberInputValue(val)
                           )
                         }
                         hideControls={false}
@@ -276,7 +286,7 @@ const AccountsOpeningBalances: React.FC = () => {
                           handleChange(
                             row.code,
                             "credit",
-                            typeof val === "number" ? val : 0
+                            parseNumberInputValue(val)
                           )
                         }
                         hideControls={false}
@@ -341,18 +351,14 @@ const AccountsOpeningBalances: React.FC = () => {
             <NumberInput
               label="Debit"
               value={modalDebit}
-              onChange={(val) =>
-                setModalDebit(typeof val === "number" ? val : 0)
-              }
+              onChange={(val) => setModalDebit(parseNumberInputValue(val))}
               min={0}
               placeholder="Enter debit amount"
             />
             <NumberInput
               label="Credit"
               value={modalCredit}
-              onChange={(val) =>
-                setModalCredit(typeof val === "number" ? val : 0)
-              }
+              onChange={(val) => setModalCredit(parseNumberInputValue(val))}
               min={0}
               placeholder="Enter credit amount"
             />

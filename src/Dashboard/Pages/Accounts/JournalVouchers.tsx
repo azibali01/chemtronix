@@ -11,6 +11,7 @@ import {
   Modal,
   Stack,
   NumberInput,
+  SegmentedControl,
 } from "@mantine/core";
 import { Download, Edit, Trash2, Plus } from "lucide-react";
 import jsPDF from "jspdf";
@@ -19,11 +20,40 @@ import { useChartOfAccounts } from "../../Context/ChartOfAccountsContext";
 import api from "../../../api_configuration/api";
 
 interface JournalVoucherEntry {
-  accountCode: string;
+  /** Chart of accounts code — sent to API as `accountNumber`, not shown in the form. */
+  accountNumber: string;
   accountName: string;
   debit: number;
   credit: number;
-  description?: string; // Added description field for each entry
+  description?: string;
+  /** Which side holds the amount for this line (form UX; stored as debit/credit numbers). */
+  entrySide?: "debit" | "credit";
+}
+
+function buildJournalLineDescription(
+  voucherLevelDescription: string | undefined,
+  entry: JournalVoucherEntry,
+): string {
+  const parts: string[] = [];
+  const v = (voucherLevelDescription || "").trim();
+  const e = (entry.description || "").trim();
+  if (v) parts.push(v);
+  if (e) parts.push(e);
+  return parts.join(" | ");
+}
+
+/** Strip legacy `| Open invoice …` suffix from stored descriptions when loading. */
+function parseStoredJournalLineDescription(stored: string): string {
+  const s = (stored || "").trim();
+  const tailPipe = s.match(/\s*\|\s*Open invoice\s+.+$/i);
+  if (tailPipe?.index !== undefined) {
+    return s.slice(0, tailPipe.index).trim();
+  }
+  const onlyInv = s.match(/^Open invoice\s+.+$/i);
+  if (onlyInv) {
+    return "";
+  }
+  return s;
 }
 
 interface JournalVoucher {
@@ -90,17 +120,22 @@ function JournalVoucherList() {
           };
         }
 
-        // Add this entry to the voucher's entries array
-        const accountCode = String(entry.accountNumber ?? "");
+        const accountNum = String(entry.accountNumber ?? "");
+        const rawDesc =
+          typeof entry.description === "string"
+            ? entry.description
+            : String(entry.description ?? "");
+        const dr = Number(entry.debit) || 0;
+        const cr = Number(entry.credit) || 0;
+        const entrySide: "debit" | "credit" =
+          dr > 0 ? "debit" : cr > 0 ? "credit" : "debit";
         groupedVouchers[voucherNum].entries.push({
-          accountCode,
-          accountName: getAccountName(accountCode),
-          debit: Number(entry.debit) || 0,
-          credit: Number(entry.credit) || 0,
-          description:
-            typeof entry.description === "string"
-              ? entry.description
-              : String(entry.description ?? ""),
+          accountNumber: accountNum,
+          accountName: getAccountName(accountNum),
+          debit: dr,
+          credit: cr,
+          description: parseStoredJournalLineDescription(rawDesc),
+          entrySide,
         });
       });
 
@@ -171,15 +206,24 @@ function JournalVoucherList() {
     children?: Account[];
   }
 
-  const accountOptions = useMemo(() => {
+  /** Searchable account picker: label is account name only (code used as value for API). */
+  const accountSelectOptions = useMemo(() => {
     const flatAccounts = flattenAccounts(chartAccounts as Account[]);
-    return flatAccounts
-      .filter((acc) => acc.accountCode && acc.accountName)
-      .map((acc) => ({
-        value: acc.accountCode!,
-        label: `${acc.accountCode} - ${acc.accountName}`,
-      }));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    const rows = flatAccounts.filter((acc) => acc.accountCode && acc.accountName);
+    const nameCount = new Map<string, number>();
+    rows.forEach((acc) => {
+      const n = String(acc.accountName);
+      nameCount.set(n, (nameCount.get(n) || 0) + 1);
+    });
+    return rows.map((acc) => {
+      const name = String(acc.accountName);
+      const dup = (nameCount.get(name) || 0) > 1;
+      const label = dup ? `${name} (${String(acc.accountCode)})` : name;
+      return {
+        value: String(acc.accountCode),
+        label,
+      };
+    });
   }, [chartAccounts]);
 
   const filteredData = useMemo(() => {
@@ -196,10 +240,8 @@ function JournalVoucherList() {
         (v) =>
           v.voucherNumber.toLowerCase().includes(s) ||
           (v.description && v.description.toLowerCase().includes(s)) ||
-          (v.entries || []).some(
-            (e) =>
-              e.accountCode.toLowerCase().includes(s) ||
-              e.accountName.toLowerCase().includes(s),
+          (v.entries || []).some((e) =>
+            (e.accountName ?? "").toLowerCase().includes(s),
           ),
       );
     }
@@ -242,16 +284,15 @@ function JournalVoucherList() {
 
     autoTable(doc, {
       startY: 135,
-      head: [["Account Code", "Account Name", "Debit", "Credit"]],
+      head: [["Account", "Debit", "Credit"]],
       body: [
         ...(voucher.entries || []).map((entry) => [
-          entry.accountCode,
           entry.accountName,
           `Rs. ${entry.debit.toLocaleString()}`,
           `Rs. ${entry.credit.toLocaleString()}`,
         ]),
         [
-          { content: "Totals", colSpan: 2, styles: { fontStyle: "bold" } },
+          { content: "Totals", colSpan: 1, styles: { fontStyle: "bold" } },
           `Rs. ${totalDebit.toLocaleString()}`,
           `Rs. ${totalCredit.toLocaleString()}`,
         ],
@@ -370,9 +411,12 @@ function JournalVoucherList() {
       // Backend expects an array of DTOs, one for each entry
       const payload = newVoucher.entries.map((entry) => ({
         voucherNumber: newVoucher.voucherNumber,
-        accountNumber: entry.accountCode, // Use the account code from each entry
+        accountNumber: entry.accountNumber,
         date: newVoucher.date,
-        description: newVoucher.description || "",
+        description: buildJournalLineDescription(
+          newVoucher.description,
+          entry,
+        ),
         debit: Number(entry.debit) || 0,
         credit: Number(entry.credit) || 0,
       }));
@@ -409,9 +453,12 @@ function JournalVoucherList() {
       // Backend expects an array of DTOs, one for each entry
       const payload = updatedVoucher.entries.map((entry) => ({
         voucherNumber: updatedVoucher.voucherNumber,
-        accountNumber: entry.accountCode, // Use the account code from each entry
+        accountNumber: entry.accountNumber,
         date: updatedVoucher.date,
-        description: updatedVoucher.description || "",
+        description: buildJournalLineDescription(
+          updatedVoucher.description,
+          entry,
+        ),
         debit: Number(entry.debit) || 0,
         credit: Number(entry.credit) || 0,
       }));
@@ -611,7 +658,7 @@ function JournalVoucherList() {
       >
         <VoucherForm
           onSubmit={handleCreate}
-          accountOptions={accountOptions}
+          accountSelectOptions={accountSelectOptions}
           autoVoucherNumber={nextVoucherNumber}
         />
       </Modal>
@@ -626,7 +673,7 @@ function JournalVoucherList() {
           <VoucherForm
             initialData={editVoucher}
             onSubmit={handleEdit}
-            accountOptions={accountOptions}
+            accountSelectOptions={accountSelectOptions}
           />
         )}
       </Modal>
@@ -637,25 +684,36 @@ function JournalVoucherList() {
 function VoucherForm({
   onSubmit,
   initialData,
-  accountOptions,
+  accountSelectOptions,
   autoVoucherNumber,
 }: {
   onSubmit: (data: JournalVoucher) => void;
   initialData?: JournalVoucher;
-  accountOptions: { value: string; label: string }[];
+  accountSelectOptions: { value: string; label: string }[];
   autoVoucherNumber?: string;
 }) {
+  const emptyEntry = (defaultSide: "debit" | "credit" = "debit"): JournalVoucherEntry => ({
+    accountNumber: "",
+    accountName: "",
+    debit: 0,
+    credit: 0,
+    entrySide: defaultSide,
+  });
+
   const [voucher, setVoucher] = useState<JournalVoucher>(
     initialData || {
       voucherNumber: autoVoucherNumber || "",
       date: new Date().toISOString().split("T")[0],
       description: "",
-      entries: [
-        { accountCode: "", accountName: "", debit: 0, credit: 0 },
-        { accountCode: "", accountName: "", debit: 0, credit: 0 },
-      ],
+      entries: [emptyEntry("debit"), emptyEntry("credit")],
     },
   );
+
+  useEffect(() => {
+    if (initialData) {
+      setVoucher(initialData);
+    }
+  }, [initialData]);
 
   // Update voucher number when autoVoucherNumber changes
   useEffect(() => {
@@ -668,6 +726,22 @@ function VoucherForm({
     setVoucher((prev) => ({ ...prev, [field]: value }));
   };
 
+  const setLineAmount = (index: number, raw: string | number) => {
+    const amt = typeof raw === "number" ? raw : Number(raw) || 0;
+    setVoucher((prev) => {
+      const newEntries = [...prev.entries];
+      const e = newEntries[index];
+      const side = e.entrySide ?? (Number(e.debit) > 0 ? "debit" : "credit");
+      newEntries[index] = {
+        ...e,
+        entrySide: side,
+        debit: side === "debit" ? amt : 0,
+        credit: side === "credit" ? amt : 0,
+      };
+      return { ...prev, entries: newEntries };
+    });
+  };
+
   const handleEntryChange = (
     index: number,
     field: keyof JournalVoucherEntry,
@@ -675,14 +749,25 @@ function VoucherForm({
   ) => {
     const newEntries = [...voucher.entries];
 
-    if (field === "accountCode") {
-      const selectedAccount = accountOptions.find((acc) => acc.value === value);
+    if (field === "accountNumber") {
+      const sel = accountSelectOptions.find((o) => o.value === String(value));
+      const baseName = sel
+        ? sel.label.replace(/\s*\([^)]*\)\s*$/, "").trim()
+        : "";
       newEntries[index] = {
         ...newEntries[index],
-        accountCode: value as string,
-        accountName: selectedAccount
-          ? selectedAccount.label.split(" - ")[1]
-          : "",
+        accountNumber: String(value ?? ""),
+        accountName: baseName,
+      };
+    } else if (field === "entrySide") {
+      const side = value as "debit" | "credit";
+      const e = newEntries[index];
+      const amt = Math.max(Number(e.debit) || 0, Number(e.credit) || 0);
+      newEntries[index] = {
+        ...e,
+        entrySide: side,
+        debit: side === "debit" ? amt : 0,
+        credit: side === "credit" ? amt : 0,
       };
     } else {
       newEntries[index] = { ...newEntries[index], [field]: value };
@@ -694,10 +779,7 @@ function VoucherForm({
   const addEntry = () => {
     setVoucher((prev) => ({
       ...prev,
-      entries: [
-        ...prev.entries,
-        { accountCode: "", accountName: "", debit: 0, credit: 0 },
-      ],
+      entries: [...prev.entries, emptyEntry("debit")],
     }));
   };
 
@@ -715,6 +797,13 @@ function VoucherForm({
     e.preventDefault();
     if (!isBalanced) {
       alert("Debit and Credit must be equal and greater than 0!");
+      return;
+    }
+    const missingAccount = voucher.entries.some(
+      (row) => (Number(row.debit) > 0 || Number(row.credit) > 0) && !row.accountNumber,
+    );
+    if (missingAccount) {
+      alert("Select an account for each line that has a debit or credit amount.");
       return;
     }
     onSubmit(voucher);
@@ -743,47 +832,96 @@ function VoucherForm({
           Journal Entries
         </Text>
 
-        {voucher.entries.map((entry, index) => (
+        {voucher.entries.map((entry, index) => {
+          const side =
+            entry.entrySide ??
+            (Number(entry.debit) > 0
+              ? "debit"
+              : Number(entry.credit) > 0
+                ? "credit"
+                : "debit");
+          const lineAmount =
+            side === "debit" ? Number(entry.debit) || 0 : Number(entry.credit) || 0;
+          const prev = index > 0 ? voucher.entries[index - 1] : null;
+          const prevSide = prev
+            ? prev.entrySide ??
+              (Number(prev.debit) > 0
+                ? "debit"
+                : Number(prev.credit) > 0
+                  ? "credit"
+                  : "debit")
+            : null;
+          const prevAmt =
+            prev && prevSide
+              ? prevSide === "debit"
+                ? Number(prev.debit) || 0
+                : Number(prev.credit) || 0
+              : 0;
+          const offsetVerb =
+            prevSide === "debit" ? "credit" : prevSide === "credit" ? "debit" : null;
+
+          return (
           <Card key={index} shadow="sm" p="sm" mb="sm" withBorder>
             <Stack gap="md">
-              <TextInput
-                label="Account Code"
-                value={entry.accountCode}
-                onChange={(e) =>
-                  handleEntryChange(index, "accountCode", e.currentTarget.value)
+              {index > 0 && prevAmt > 0 && offsetVerb ? (
+                <Text size="sm" c="dimmed">
+                  Offset the line above: enter a{" "}
+                  <Text span fw={600} c="dark" tt="capitalize">
+                    {offsetVerb}
+                  </Text>{" "}
+                  of Rs. {prevAmt.toLocaleString()} on this line (pick the account
+                  and side below).
+                </Text>
+              ) : null}
+              <Select
+                label="Account"
+                placeholder="Type to search by account name"
+                searchable
+                data={accountSelectOptions}
+                value={entry.accountNumber || null}
+                onChange={(v) =>
+                  handleEntryChange(index, "accountNumber", v ?? "")
                 }
+                clearable
               />
-              <TextInput
-                label="Account Name"
-                value={entry.accountName}
-                onChange={(e) =>
-                  handleEntryChange(index, "accountName", e.currentTarget.value)
-                }
-              />
+              <div>
+                <Text size="sm" fw={500} mb={6}>
+                  This line is
+                </Text>
+                <SegmentedControl
+                  fullWidth
+                  data={[
+                    { label: "Debit", value: "debit" },
+                    { label: "Credit", value: "credit" },
+                  ]}
+                  value={side}
+                  onChange={(v) =>
+                    handleEntryChange(
+                      index,
+                      "entrySide",
+                      v as "debit" | "credit",
+                    )
+                  }
+                />
+              </div>
               <NumberInput
-                label="Debit"
-                value={entry.debit}
-                onChange={(value) => handleEntryChange(index, "debit", value)}
-                min={0}
-                step={0.01}
-              />
-              <NumberInput
-                label="Credit"
-                value={entry.credit}
-                onChange={(value) => handleEntryChange(index, "credit", value)}
+                label={side === "debit" ? "Debit amount" : "Credit amount"}
+                value={lineAmount}
+                onChange={(value) => setLineAmount(index, value ?? 0)}
                 min={0}
                 step={0.01}
               />
               <TextInput
                 label="Description"
-                value={entry.description}
+                value={entry.description ?? ""}
                 onChange={(e) =>
                   handleEntryChange(index, "description", e.currentTarget.value)
                 }
               />
             </Stack>
           </Card>
-        ))}
+          );
+        })}
 
         <Button
           variant="light"

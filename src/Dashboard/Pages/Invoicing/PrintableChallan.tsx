@@ -33,71 +33,83 @@ export function PrintableChallan({
   const secondaryColor = brand === "chemtronics" ? "#0A6802" : "#004499";
   const cellBorder: CSSProperties = {
     border: "1px solid #222",
-    padding: 5,
+    padding: "22px 18px",
+    textAlign: "center",
+    verticalAlign: "middle",
+    fontSize: 15,
   };
+
+  const thCell: CSSProperties = {
+    ...cellBorder,
+    fontWeight: "bold",
+    color: secondaryColor,
+    fontSize: 15,
+    minHeight: 58,
+  };
+
+  const logoHeightPx = brand === "chemtronics" ? 92 : 64;
 
   return (
     <div
       className="printable-challan"
       style={{
-        fontFamily: "Arial, sans-serif",
+        fontFamily: "Arial, Helvetica, sans-serif",
         background: "#fff",
-        padding: "12px 15px",
+        fontSize: 14,
+        lineHeight: 1.45,
+        padding: "16px 0 0",
         width: "100%",
-        maxWidth: "190mm",
+        maxWidth: "210mm",
         margin: "0 auto",
         boxSizing: "border-box",
         position: "relative",
-        overflow: "hidden",
+        minHeight: "100vh",
+        display: "flex",
+        flexDirection: "column",
         pageBreakInside: "avoid",
         breakInside: "avoid",
       }}
     >
+      {/* 93% print scale applies to this wrapper only (see DeliveryChallans print CSS); footer stays full width */}
+      <div
+        className="printable-challan__scale"
+        style={{ flex: "0 0 auto", width: "100%" }}
+      >
+      <div
+        className="printable-challan__main"
+        style={{
+          flex: "0 0 auto",
+          position: "relative",
+          paddingLeft: 18,
+          paddingRight: 18,
+        }}
+      >
       {/* Header */}
-      <div style={{ textAlign: "center", marginBottom: 4 }}>
-        <img src={logoSrc} alt="Logo" style={{ height: 40 }} />
+      <div style={{ textAlign: "center", marginBottom: 14 }}>
+        <img
+          src={logoSrc}
+          alt=""
+          style={{ height: logoHeightPx, width: "auto", maxWidth: "100%" }}
+        />
         <h2
           style={{
             color: primaryColor,
-            margin: "4px 0",
-            fontSize: 20,
+            margin: "10px 0 6px",
+            fontSize: 28,
             fontWeight: "bold",
-            letterSpacing: 1,
+            letterSpacing: 0.5,
           }}
         >
           Delivery Challan
         </h2>
       </div>
 
-      {/* Original/Duplicate/Triplicate */}
-      <div style={{ position: "absolute", top: 20, right: 20 }}>
-        <table style={{ border: "1px solid #222", fontSize: 11 }}>
-          <tbody>
-            <tr>
-              <td style={{ border: "1px solid #222", padding: "2px 8px" }}>
-                Original
-              </td>
-            </tr>
-            <tr>
-              <td style={{ border: "1px solid #222", padding: "2px 8px" }}>
-                Duplicate
-              </td>
-            </tr>
-            <tr>
-              <td style={{ border: "1px solid #222", padding: "2px 8px" }}>
-                Triplicate
-              </td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-
       {/* Party Info */}
       <table
         style={{
           width: "100%",
-          fontSize: 10,
-          marginBottom: 8,
+          fontSize: 14,
+          marginBottom: 12,
           tableLayout: "fixed",
         }}
       >
@@ -107,8 +119,9 @@ export function PrintableChallan({
               style={{
                 color: secondaryColor,
                 fontWeight: "bold",
-                width: 120,
-                paddingBottom: 6,
+                width: 150,
+                paddingBottom: 10,
+                verticalAlign: "top",
               }}
             >
               Party Name
@@ -116,9 +129,10 @@ export function PrintableChallan({
             <td
               style={{
                 color: "#222",
-                fontWeight: "bold",
-                paddingBottom: 6,
+                fontWeight: 600,
+                paddingBottom: 10,
                 wordBreak: "break-word",
+                verticalAlign: "top",
               }}
             >
               {challan.partyName}
@@ -127,13 +141,14 @@ export function PrintableChallan({
               style={{
                 color: secondaryColor,
                 fontWeight: "bold",
-                width: 120,
-                paddingBottom: 6,
+                width: 150,
+                paddingBottom: 10,
+                verticalAlign: "top",
               }}
             >
               Delivery Date
             </td>
-            <td style={{ color: "#222", paddingBottom: 6 }}>
+            <td style={{ color: "#222", paddingBottom: 10, verticalAlign: "top" }}>
               {challan.deliveryDate}
             </td>
           </tr>
@@ -142,7 +157,8 @@ export function PrintableChallan({
               style={{
                 color: secondaryColor,
                 fontWeight: "bold",
-                paddingBottom: 6,
+                paddingBottom: 10,
+                verticalAlign: "top",
               }}
             >
               Party Address
@@ -150,8 +166,9 @@ export function PrintableChallan({
             <td
               style={{
                 color: "#222",
-                paddingBottom: 6,
+                paddingBottom: 10,
                 wordBreak: "break-word",
+                verticalAlign: "top",
               }}
             >
               {challan.partyAddress}
@@ -160,12 +177,13 @@ export function PrintableChallan({
               style={{
                 color: secondaryColor,
                 fontWeight: "bold",
-                paddingBottom: 6,
+                paddingBottom: 10,
+                verticalAlign: "top",
               }}
             >
-              DC No#
+              DC No
             </td>
-            <td style={{ color: "#222", paddingBottom: 6 }}>
+            <td style={{ color: "#222", paddingBottom: 10, verticalAlign: "top" }}>
               {challan.challanId}
             </td>
           </tr>
@@ -174,22 +192,26 @@ export function PrintableChallan({
               style={{
                 color: secondaryColor,
                 fontWeight: "bold",
-                paddingBottom: 6,
+                paddingBottom: 10,
+                verticalAlign: "top",
               }}
             >
-              PO No#
+              PO Ref
             </td>
-            <td style={{ color: "#222", paddingBottom: 6 }}>{challan.poNo}</td>
+            <td style={{ color: "#222", paddingBottom: 10, verticalAlign: "top" }}>
+              {challan.poNo}
+            </td>
             <td
               style={{
                 color: secondaryColor,
                 fontWeight: "bold",
-                paddingBottom: 6,
+                paddingBottom: 10,
+                verticalAlign: "top",
               }}
             >
               PO Date
             </td>
-            <td style={{ color: "#222", paddingBottom: 6 }}>
+            <td style={{ color: "#222", paddingBottom: 10, verticalAlign: "top" }}>
               {challan.poDate}
             </td>
           </tr>
@@ -198,24 +220,26 @@ export function PrintableChallan({
               style={{
                 color: secondaryColor,
                 fontWeight: "bold",
-                paddingBottom: 6,
+                paddingBottom: 10,
+                verticalAlign: "top",
               }}
             >
               Contact Person
             </td>
-            <td style={{ color: "#222", paddingBottom: 6 }}>
+            <td style={{ color: "#222", paddingBottom: 10, verticalAlign: "top" }}>
               {challan.contactPerson || "-"}
             </td>
             <td
               style={{
                 color: secondaryColor,
                 fontWeight: "bold",
-                paddingBottom: 6,
+                paddingBottom: 10,
+                verticalAlign: "top",
               }}
             >
               Party Phone #
             </td>
-            <td style={{ color: "#222", paddingBottom: 6 }}>
+            <td style={{ color: "#222", paddingBottom: 10, verticalAlign: "top" }}>
               {challan.partyPhone || "-"}
             </td>
           </tr>
@@ -224,12 +248,13 @@ export function PrintableChallan({
               style={{
                 color: secondaryColor,
                 fontWeight: "bold",
-                paddingBottom: 6,
+                paddingBottom: 10,
+                verticalAlign: "top",
               }}
             >
               Other
             </td>
-            <td style={{ color: "#222", paddingBottom: 6 }}>
+            <td style={{ color: "#222", paddingBottom: 10, verticalAlign: "top" }}>
               {challan.other || "-"}
             </td>
             <td></td>
@@ -242,53 +267,56 @@ export function PrintableChallan({
       <table
         style={{
           width: "100%",
-          fontSize: 10,
-          marginBottom: 8,
+          fontSize: 14,
+          marginBottom: 14,
           tableLayout: "fixed",
         }}
       >
         <tbody>
           <tr>
-            <td style={{ width: "33%", paddingBottom: 6 }}>
+            <td style={{ width: "33%", paddingBottom: 10 }}>
               <span style={{ color: secondaryColor, fontWeight: "bold" }}>
                 Vehicle No.
               </span>{" "}
               <span
                 style={{
                   borderBottom: "1px solid #222",
-                  minWidth: 48,
+                  minWidth: 100,
                   display: "inline-block",
                   marginLeft: 8,
+                  fontSize: 14,
                 }}
               >
                 {challan.vehicleNo || ""}
               </span>
             </td>
-            <td style={{ width: "33%", paddingBottom: 6 }}>
+            <td style={{ width: "33%", paddingBottom: 10 }}>
               <span style={{ color: secondaryColor, fontWeight: "bold" }}>
                 Delivered By
               </span>{" "}
               <span
                 style={{
                   borderBottom: "1px solid #222",
-                  minWidth: 48,
+                  minWidth: 100,
                   display: "inline-block",
                   marginLeft: 8,
+                  fontSize: 14,
                 }}
               >
                 {challan.deliveredBy || ""}
               </span>
             </td>
-            <td style={{ width: "33%", paddingBottom: 6 }}>
+            <td style={{ width: "33%", paddingBottom: 10 }}>
               <span style={{ color: secondaryColor, fontWeight: "bold" }}>
                 Driver Cell No.
               </span>{" "}
               <span
                 style={{
                   borderBottom: "1px solid #222",
-                  minWidth: 48,
+                  minWidth: 100,
                   display: "inline-block",
                   marginLeft: 8,
+                  fontSize: 14,
                 }}
               >
                 {challan.driverCellNo || ""}
@@ -305,98 +333,36 @@ export function PrintableChallan({
           width: "100%",
           borderCollapse: "collapse",
           border: "1px solid #222",
-          fontSize: 10,
-          marginBottom: 12,
-          marginTop: 8,
+          fontSize: 15,
+          marginBottom: 16,
+          marginTop: 10,
           tableLayout: "fixed",
           pageBreakInside: "avoid",
         }}
       >
         <thead>
           <tr style={{ background: "#F8FFF6" }}>
-            <th
-              style={{
-                ...cellBorder,
-                width: "7%",
-                fontWeight: "bold",
-                color: secondaryColor,
-              }}
-            >
-              SR.
-            </th>
-            <th
-              style={{
-                ...cellBorder,
-                width: "18%",
-                fontWeight: "bold",
-                color: secondaryColor,
-              }}
-            >
-              Item Code
-            </th>
-            <th
-              style={{
-                ...cellBorder,
-                width: "33%",
-                overflowWrap: "anywhere",
-                fontWeight: "bold",
-                color: secondaryColor,
-              }}
-            >
+            <th style={{ ...thCell, width: "8%" }}>SR</th>
+            <th style={{ ...thCell, width: "19%" }}>Item Code</th>
+            <th style={{ ...thCell, width: "35%", overflowWrap: "anywhere" }}>
               Particulars
             </th>
-            <th
-              style={{
-                ...cellBorder,
-                width: "10%",
-                fontWeight: "bold",
-                color: secondaryColor,
-              }}
-            >
-              Unit
-            </th>
-            <th
-              style={{
-                ...cellBorder,
-                width: "10%",
-                fontWeight: "bold",
-                color: secondaryColor,
-              }}
-            >
-              Length
-            </th>
-            <th
-              style={{
-                ...cellBorder,
-                width: "10%",
-                fontWeight: "bold",
-                color: secondaryColor,
-              }}
-            >
-              Width
-            </th>
-            <th
-              style={{
-                ...cellBorder,
-                width: "12%",
-                fontWeight: "bold",
-                color: secondaryColor,
-              }}
-            >
-              Qty
-            </th>
+            <th style={{ ...thCell, width: "10%" }}>Unit</th>
+            <th style={{ ...thCell, width: "10%" }}>Length</th>
+            <th style={{ ...thCell, width: "10%" }}>Width</th>
+            <th style={{ ...thCell, width: "8%" }}>Qty</th>
           </tr>
         </thead>
         <tbody>
           {items.length === 0 ? (
-            <tr style={{ pageBreakInside: "avoid" }}>
+            <tr style={{ pageBreakInside: "avoid", minHeight: 96 }}>
               <td
                 colSpan={7}
                 style={{
                   ...cellBorder,
-                  textAlign: "center",
                   color: "#666",
                   fontStyle: "italic",
+                  minHeight: 96,
                 }}
               >
                 No line items
@@ -406,12 +372,11 @@ export function PrintableChallan({
             items.map((item, idx) => (
               <tr
                 key={`${item.sr}-${idx}-${item.itemCode}`}
-                style={{ pageBreakInside: "avoid" }}
+                style={{ pageBreakInside: "avoid", minHeight: 96 }}
               >
                 <td
                   style={{
                     ...cellBorder,
-                    textAlign: "center",
                     overflowWrap: "anywhere",
                   }}
                 >
@@ -440,121 +405,145 @@ export function PrintableChallan({
           )}
         </tbody>
       </table>
+      </div>
+      </div>
 
-      {/* Signatures — directly above invoice footer image */}
-      <div style={{ marginTop: 8, marginBottom: 4, pageBreakInside: "avoid" }}>
-        <table
+      {/* Signatures + footer image stay together at page bottom (no flex gap between them) */}
+      <div
+        className="printable-challan-bottom"
+        style={{
+          marginTop: "auto",
+          flexShrink: 0,
+          width: "100%",
+          alignSelf: "stretch",
+          display: "flex",
+          flexDirection: "column",
+          pageBreakInside: "avoid",
+        }}
+      >
+        <div
+          className="printable-challan-signatures"
           style={{
-            width: "100%",
-            fontSize: 10,
-            marginBottom: 4,
-            tableLayout: "fixed",
+            padding: "14px 18px 6px",
             pageBreakInside: "avoid",
           }}
         >
-          <tbody>
-            <tr>
-              <td
-                style={{
-                  width: "33%",
-                  textAlign: "center",
-                  paddingBottom: 8,
-                }}
-              >
-                <span
+          <table
+            style={{
+              width: "100%",
+              fontSize: 14,
+              marginBottom: 8,
+              tableLayout: "fixed",
+              pageBreakInside: "avoid",
+            }}
+          >
+            <tbody>
+              <tr>
+                <td
                   style={{
-                    color: secondaryColor,
-                    fontWeight: "bold",
-                    borderBottom: "1px solid #222",
-                    paddingBottom: 1,
-                    fontSize: 9,
+                    width: "33%",
+                    textAlign: "center",
+                    paddingBottom: 12,
                   }}
                 >
-                  Prepared By
-                </span>
-              </td>
-              <td
-                style={{
-                  width: "33%",
-                  textAlign: "center",
-                  paddingBottom: 8,
-                }}
-              >
-                <span
+                  <span
+                    style={{
+                      color: secondaryColor,
+                      fontWeight: "bold",
+                      borderBottom: "1px solid #222",
+                      paddingBottom: 2,
+                      fontSize: 13,
+                    }}
+                  >
+                    Prepared By
+                  </span>
+                </td>
+                <td
                   style={{
-                    color: secondaryColor,
-                    fontWeight: "bold",
-                    borderBottom: "1px solid #222",
-                    paddingBottom: 1,
-                    fontSize: 9,
+                    width: "33%",
+                    textAlign: "center",
+                    paddingBottom: 12,
                   }}
                 >
-                  Checked By
-                </span>
-              </td>
-              <td
-                style={{
-                  width: "33%",
-                  textAlign: "center",
-                  paddingBottom: 8,
-                }}
-              >
-                <span
+                  <span
+                    style={{
+                      color: secondaryColor,
+                      fontWeight: "bold",
+                      borderBottom: "1px solid #222",
+                      paddingBottom: 2,
+                      fontSize: 13,
+                    }}
+                  >
+                    Checked By
+                  </span>
+                </td>
+                <td
                   style={{
-                    color: secondaryColor,
-                    fontWeight: "bold",
-                    borderBottom: "1px solid #222",
-                    paddingBottom: 1,
-                    fontSize: 9,
+                    width: "33%",
+                    textAlign: "center",
+                    paddingBottom: 12,
                   }}
                 >
-                  Manager
-                </span>
-              </td>
-            </tr>
-          </tbody>
-        </table>
-        <div style={{ margin: "4px 0", fontSize: 8 }}>
-          Please receive the above material and return duplicate of this challan
-          duly received and signed for record
+                  <span
+                    style={{
+                      color: secondaryColor,
+                      fontWeight: "bold",
+                      borderBottom: "1px solid #222",
+                      paddingBottom: 2,
+                      fontSize: 13,
+                    }}
+                  >
+                    Receipt
+                  </span>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div style={{ margin: "8px 0", fontSize: 11, lineHeight: 1.4 }}>
+            Please receive the above material and return duplicate of this
+            challan duly received and signed for record
+          </div>
+          <div
+            style={{
+              textAlign: "right",
+              fontWeight: "bold",
+              color: secondaryColor,
+              fontSize: 13,
+              marginTop: 6,
+              borderBottom: "1px solid #222",
+              paddingBottom: 4,
+            }}
+          >
+            Receiver Signature
+          </div>
         </div>
+
         <div
+          className="printable-challan-footer-wrap"
           style={{
-            textAlign: "right",
-            fontWeight: "bold",
-            color: secondaryColor,
-            fontSize: 10,
-            marginTop: 4,
-            borderBottom: "1px solid #222",
-            paddingBottom: 2,
+            flexShrink: 0,
+            width: "100%",
+            alignSelf: "stretch",
+            pageBreakInside: "avoid",
           }}
         >
-          Receiver Signature
+          <img
+            src={
+              brand === "chemtronics"
+                ? "/footer finl.jpg"
+                : getFooterImage(brand)
+            }
+            alt=""
+            className="printable-challan-footer-img"
+            style={{
+              width: "100%",
+              height: "auto",
+              display: "block",
+              objectFit: "contain",
+              objectPosition: "bottom center",
+            }}
+          />
         </div>
-      </div>
-
-      {/* Same footer image as sales invoice print */}
-      <div
-        style={{
-          marginTop: 8,
-          marginBottom: 0,
-          pageBreakInside: "avoid",
-          width: "100%",
-        }}
-      >
-        <img
-          src={
-            brand === "chemtronics" ? "/footer finl.jpg" : getFooterImage(brand)
-          }
-          alt="Footer"
-          style={{
-            width: "100%",
-            height: "auto",
-            maxHeight: 120,
-            objectFit: "contain",
-            display: "block",
-          }}
-        />
       </div>
     </div>
   );

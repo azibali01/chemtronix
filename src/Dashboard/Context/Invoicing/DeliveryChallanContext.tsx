@@ -89,7 +89,7 @@ export const DeliveryChallanProvider: React.FC<{
       const response = await api.post("/delivery-chalan", challan);
 
       if (response.status === 201) {
-        setChallans((prev) => [...prev, response.data]);
+        setChallans((prev) => [response.data, ...prev]);
         notifications.show({
           title: "Success",
           message: "Delivery challan created successfully",

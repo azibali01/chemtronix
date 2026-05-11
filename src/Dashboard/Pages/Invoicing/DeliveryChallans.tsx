@@ -17,6 +17,7 @@ import {
   Alert,
   Center,
   Stack,
+  Tooltip,
 } from "@mantine/core";
 import {
   IconPencil,
@@ -541,14 +542,26 @@ function DeliveryChallansInner() {
     doc.save("delivery_challans.pdf");
   };
 
-  // Safe print function using window.print() with CSS media queries
+  // Safe print: clear document title so the browser’s left print header stays empty (or minimal).
+  // URL, page numbers, and date in the margins only go away when "Headers and footers" is off in the print dialog.
   const handlePrint = () => {
+    const prevTitle = document.title;
+    const nextTitle = "";
     setIsPrinting(true);
-    // Use setTimeout to ensure React has rendered the print component
-    setTimeout(() => {
-      window.print();
+    const restore = () => {
+      document.title = prevTitle;
       setIsPrinting(false);
-    }, 100);
+      window.removeEventListener("afterprint", restore);
+    };
+    window.addEventListener("afterprint", restore);
+    window.setTimeout(() => {
+      document.title = nextTitle;
+      window.print();
+      // Some browsers omit afterprint; restore title / UI if still on print title
+      window.setTimeout(() => {
+        if (document.title === nextTitle || document.title === "") restore();
+      }, 2000);
+    }, 150);
   };
 
   // Open delete modal
@@ -581,11 +594,18 @@ function DeliveryChallansInner() {
     <>
       <style>{`
         @media print {
+          @page {
+            margin: 10mm;
+            size: A4 portrait;
+          }
+
           html, body {
             margin: 0 !important;
             padding: 0 !important;
             background: white !important;
-            height: auto !important;
+            height: 100% !important;
+            -webkit-print-color-adjust: exact !important;
+            print-color-adjust: exact !important;
           }
 
           body * {
@@ -593,42 +613,78 @@ function DeliveryChallansInner() {
           }
 
           .printable-challan-container {
-            display: block !important;
+            display: flex !important;
+            flex-direction: column !important;
             visibility: visible !important;
             width: 100%;
+            min-height: 277mm !important;
+            height: auto !important;
             background: white;
             page-break-after: avoid;
             page-break-before: avoid;
             page-break-inside: avoid;
             margin: 0;
             padding: 0;
-            height: auto;
+            box-sizing: border-box;
           }
 
           .printable-challan-container * {
             visibility: visible !important;
           }
 
-          /* Prevent page breaks within challan */
           .printable-challan {
+            flex: 1 1 auto !important;
+            display: flex !important;
+            flex-direction: column !important;
+            min-height: 100% !important;
+            max-width: none !important;
+            width: 100% !important;
             page-break-inside: avoid !important;
             page-break-after: avoid !important;
             break-inside: avoid !important;
           }
 
-          /* Full grid borders on line items table (some engines drop hairlines without this) */
+          /* 93% scale on challan body only; footer sibling stays full width */
+          .printable-challan__scale {
+            transform: scale(0.93) !important;
+            transform-origin: top center !important;
+            width: calc(100% / 0.93) !important;
+            max-width: calc(100% / 0.93) !important;
+            margin-left: auto !important;
+            margin-right: auto !important;
+          }
+
+          .printable-challan-bottom {
+            margin-top: auto !important;
+            flex-shrink: 0 !important;
+            width: 100% !important;
+            display: flex !important;
+            flex-direction: column !important;
+          }
+
+          .printable-challan-footer-wrap {
+            flex-shrink: 0 !important;
+            width: 100% !important;
+            max-width: none !important;
+            align-self: stretch !important;
+            margin-top: 0 !important;
+            -webkit-print-color-adjust: exact !important;
+            print-color-adjust: exact !important;
+          }
+
+          .printable-challan-footer-img {
+            width: 100% !important;
+            max-width: none !important;
+            height: auto !important;
+            display: block !important;
+          }
+
           .printable-challan .challan-items-table,
           .printable-challan .challan-items-table th,
           .printable-challan .challan-items-table td {
             border: 1px solid #222 !important;
             -webkit-print-color-adjust: exact !important;
             print-color-adjust: exact !important;
-          }
-
-          /* Reset all margins and padding for print */
-          @page {
-            margin: 0.5cm;
-            size: A4;
           }
         }
         @media screen {
@@ -1157,9 +1213,16 @@ function DeliveryChallansInner() {
             })()}
 
           <Group justify="right" mt="md">
-            <Button color="#819E00" variant="outline" onClick={handlePrint}>
-              Print
-            </Button>
+            <Tooltip
+              label="Print preview: turn off “Headers and footers” (Chrome/Edge) or “Print headers and footers” so the URL, page count, and date do not appear. The challan title in the margin is cleared while printing."
+              multiline
+              w={320}
+              withArrow
+            >
+              <Button color="#819E00" variant="outline" onClick={handlePrint}>
+                Print
+              </Button>
+            </Tooltip>
             <Button color="#0A6802" onClick={handleSave}>
               {editData ? "Update Challan" : "Create Challan"}
             </Button>

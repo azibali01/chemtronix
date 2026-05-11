@@ -8,36 +8,31 @@ import {
   Button,
   Table,
   Group,
-  Badge,
   Stack,
   Pagination,
   TextInput,
-  Select,
 } from "@mantine/core";
 import jsPDF from "jspdf";
 import autoTable, { type RowInput } from "jspdf-autotable";
 import { Download, Filter } from "lucide-react";
 import { useBrand } from "../../Context/BrandContext";
 import { getHeaderImage, getFooterImage } from "../../../utils/assetPaths";
-import {
-  IconAlertCircle,
-  IconArrowUpRight,
-  IconClock,
-} from "@tabler/icons-react";
+import { IconArrowUpRight } from "@tabler/icons-react";
 
 type ARCustomer = {
   accountNumber: string;
   accountName: string;
-  outstanding: number;
-  current: number;
-  days31to60: number;
-  days61to90: number;
-  days90plus: number;
+  openingDebit: number;
+  openingCredit: number;
+  currentDebit: number;
+  currentCredit: number;
+  closingBalance: number;
 };
 
 type SaleInvoice = {
   _id?: string;
   accountTitle: string;
+  accountNumber?: string;
   invoiceNumber?: string;
   invoiceDate?: string;
   netAmount?: number;
@@ -49,18 +44,108 @@ type InvoiceRow = {
   invoiceNumber: string;
   date: string;
   amount: number;
-  status: "current" | "31-60" | "61-90" | "90+";
 };
 
+function fmtRs(n: number) {
+  return `Rs. ${Math.abs(Number(n) || 0).toLocaleString()}`;
+}
+
+/** Normalize chart / invoice account codes for comparison (spacing, case). */
+function normalizeAccountCode(s: string | undefined): string {
+  return String(s ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, "");
+}
+
+/** Compare two account codes allowing prefix match (e.g. "1410" vs "1410-Receivables Accounts"). */
+function accountCodesMatch(a: string | undefined, b: string | undefined): boolean {
+  const x = normalizeAccountCode(a);
+  const y = normalizeAccountCode(b);
+  if (!x || !y) return false;
+  if (x === y) return true;
+  const xHead = x.split("-")[0] ?? x;
+  const yHead = y.split("-")[0] ?? y;
+  if (xHead && yHead && (xHead === yHead || x.startsWith(yHead) || y.startsWith(xHead)))
+    return true;
+  return false;
+}
+
+/** Sale invoice belongs to this AR row (title and/or account number). */
+function invoiceMatchesCustomer(inv: SaleInvoice, c: ARCustomer): boolean {
+  const titleInv = (inv.accountTitle || "").trim().toLowerCase();
+  const titleCust = (c.accountName || "").trim().toLowerCase();
+  if (titleInv && titleCust && titleInv === titleCust) return true;
+  return accountCodesMatch(inv.accountNumber, c.accountNumber);
+}
+
+function customerMatchesSearch(c: ARCustomer, q: string): boolean {
+  const query = q.trim().toLowerCase();
+  if (!query) return true;
+  const name = (c.accountName || "").toLowerCase();
+  const num = String(c.accountNumber || "").toLowerCase();
+  const numCompact = num.replace(/\s+/g, "");
+  if (name.includes(query) || num.includes(query) || numCompact.includes(query.replace(/\s+/g, "")))
+    return true;
+  const tokens = query.split(/\s+/).filter(Boolean);
+  if (tokens.length > 1) {
+    return tokens.every(
+      (t) => name.includes(t) || num.includes(t) || numCompact.includes(t.replace(/\s+/g, "")),
+    );
+  }
+  return false;
+}
+
+/** Parse YYYY-MM-DD as local calendar date (avoids UTC off-by-one vs invoice times). */
+function parseLocalDateEndOfDay(ymd: string): Date | null {
+  if (!ymd) return null;
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(ymd.trim());
+  if (!m) return null;
+  const y = Number(m[1]);
+  const mo = Number(m[2]) - 1;
+  const d = Number(m[3]);
+  const dt = new Date(y, mo, d, 23, 59, 59, 999);
+  return Number.isNaN(dt.getTime()) ? null : dt;
+}
+
+function parseLocalDateStartOfDay(ymd: string): Date | null {
+  if (!ymd) return null;
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(ymd.trim());
+  if (!m) return null;
+  const y = Number(m[1]);
+  const mo = Number(m[2]) - 1;
+  const d = Number(m[3]);
+  const dt = new Date(y, mo, d, 0, 0, 0, 0);
+  return Number.isNaN(dt.getTime()) ? null : dt;
+}
+
+function invoiceDateInRange(
+  inv: SaleInvoice,
+  fromYmd: string,
+  toYmd: string,
+): boolean {
+  if (!inv.invoiceDate) return false;
+  const d = new Date(inv.invoiceDate);
+  if (Number.isNaN(d.getTime())) return false;
+  const from = fromYmd ? parseLocalDateStartOfDay(fromYmd) : null;
+  const to = toYmd ? parseLocalDateEndOfDay(toYmd) : null;
+  if (from && d < from) return false;
+  if (to && d > to) return false;
+  return true;
+}
+
 export default function AccountsReceivable() {
+  const { brand } = useBrand();
   const [arData, setArData] = useState<ARCustomer[]>([]);
   const [saleInvoices, setSaleInvoices] = useState<SaleInvoice[]>([]);
 
   const [page, setPage] = useState(1);
   const [invoicePage, setInvoicePage] = useState(1);
-  const [expandedCustomer, setExpandedCustomer] = useState<string | null>(null); // accountName
+  /** Which receivable row is expanded (chart account code / JV key). */
+  const [expandedAccountNumber, setExpandedAccountNumber] = useState<
+    string | null
+  >(null);
   const [search, setSearch] = useState("");
-  const [agingFilter, setAgingFilter] = useState<string | null>(null);
   const [fromDate, setFromDate] = useState<string>("");
   const [toDate, setToDate] = useState<string>("");
   const [appliedFromDate, setAppliedFromDate] = useState<string>("");
@@ -69,7 +154,6 @@ export default function AccountsReceivable() {
   const pageSize = 5;
   const invoicePageSize = 5;
 
-  // ── Fetch AR summary from backend + sale invoices for drill-down ──────────
   useEffect(() => {
     const fetchAll = async () => {
       try {
@@ -86,54 +170,79 @@ export default function AccountsReceivable() {
     fetchAll();
   }, []);
 
+  useEffect(() => {
+    setPage(1);
+  }, [search]);
+
   const applyFilters = () => {
     setAppliedFromDate(fromDate);
     setAppliedToDate(toDate);
     setPage(1);
+    setInvoicePage(1);
   };
 
-  // ── Client-side filter: search + aging bucket ─────────────────────────────
   const filteredCustomers = useMemo(() => {
-    return arData.filter((c) => {
-      const matchesSearch = c.accountName
-        .toLowerCase()
-        .includes(search.toLowerCase());
-      let matchesAging = true;
-      if (agingFilter === "current") matchesAging = c.current > 0;
-      else if (agingFilter === "31-60") matchesAging = c.days31to60 > 0;
-      else if (agingFilter === "61-90") matchesAging = c.days61to90 > 0;
-      else if (agingFilter === "90+") matchesAging = c.days90plus > 0;
-      return matchesSearch && matchesAging;
-    });
-  }, [arData, search, agingFilter]);
+    return arData.filter((c) => customerMatchesSearch(c, search));
+  }, [arData, search]);
+
+  const expandedCustomerRow = useMemo(
+    () =>
+      expandedAccountNumber
+        ? (arData.find((c) => c.accountNumber === expandedAccountNumber) ??
+          null)
+        : null,
+    [arData, expandedAccountNumber],
+  );
+
+  useEffect(() => {
+    setInvoicePage(1);
+  }, [expandedAccountNumber, appliedFromDate, appliedToDate]);
+
+  useEffect(() => {
+    if (!expandedAccountNumber) return;
+    const stillInView = filteredCustomers.some(
+      (c) => c.accountNumber === expandedAccountNumber,
+    );
+    if (!stillInView) setExpandedAccountNumber(null);
+  }, [filteredCustomers, expandedAccountNumber]);
 
   const paginatedCustomers = filteredCustomers.slice(
     (page - 1) * pageSize,
     page * pageSize,
   );
 
-  // ── Totals for summary cards ──────────────────────────────────────────────
-  const totalOutstanding = filteredCustomers.reduce(
-    (s, c) => s + c.outstanding,
+  const totalClosing = filteredCustomers.reduce(
+    (s, c) => s + (Number(c.closingBalance) || 0),
     0,
   );
-  const totalCurrent = filteredCustomers.reduce((s, c) => s + c.current, 0);
-  const total30 = filteredCustomers.reduce((s, c) => s + c.days31to60, 0);
-  const total60 = filteredCustomers.reduce((s, c) => s + c.days61to90, 0);
-  const total90 = filteredCustomers.reduce((s, c) => s + c.days90plus, 0);
+  const totalOpeningDebit = filteredCustomers.reduce(
+    (s, c) => s + (Number(c.openingDebit) || 0),
+    0,
+  );
+  const totalOpeningCredit = filteredCustomers.reduce(
+    (s, c) => s + (Number(c.openingCredit) || 0),
+    0,
+  );
+  const totalCurrentDebit = filteredCustomers.reduce(
+    (s, c) => s + (Number(c.currentDebit) || 0),
+    0,
+  );
+  const totalCurrentCredit = filteredCustomers.reduce(
+    (s, c) => s + (Number(c.currentCredit) || 0),
+    0,
+  );
 
-  // ── Expanded invoice drill-down (uses raw sale-invoice API) ──────────────
   const expandedInvoices = useMemo<InvoiceRow[]>(() => {
-    if (!expandedCustomer) return [];
-    const from = appliedFromDate ? new Date(appliedFromDate) : null;
-    const to = appliedToDate ? new Date(appliedToDate) : null;
+    if (!expandedCustomerRow) return [];
+    const hasDateRange =
+      appliedFromDate.trim() !== "" || appliedToDate.trim() !== "";
 
     return saleInvoices
       .filter((inv) => {
-        if (inv.accountTitle !== expandedCustomer) return false;
-        if (!inv.invoiceDate) return true;
-        const d = new Date(inv.invoiceDate);
-        return (!from || d >= from) && (!to || d <= to);
+        if (!invoiceMatchesCustomer(inv, expandedCustomerRow)) return false;
+        if (!hasDateRange) return true;
+        if (!inv.invoiceDate) return false;
+        return invoiceDateInRange(inv, appliedFromDate, appliedToDate);
       })
       .map((inv) => {
         const amount =
@@ -142,29 +251,19 @@ export default function AccountsReceivable() {
             (s, p) => s + (Number(p.qty) || 0) * (Number(p.rate) || 0),
             0,
           );
-        const days = inv.invoiceDate
-          ? Math.floor(
-              (Date.now() - new Date(inv.invoiceDate).getTime()) /
-                (1000 * 60 * 60 * 24),
-            )
-          : 0;
-        const status: InvoiceRow["status"] =
-          days <= 30
-            ? "current"
-            : days <= 60
-              ? "31-60"
-              : days <= 90
-                ? "61-90"
-                : "90+";
         return {
           id: inv._id ?? "",
           invoiceNumber: inv.invoiceNumber ?? "",
           date: inv.invoiceDate?.split("T")[0] ?? "",
           amount,
-          status,
         };
       });
-  }, [expandedCustomer, saleInvoices, appliedFromDate, appliedToDate]);
+  }, [
+    expandedCustomerRow,
+    saleInvoices,
+    appliedFromDate,
+    appliedToDate,
+  ]);
 
   const expandedInvoicesPaginated = expandedInvoices.slice(
     (invoicePage - 1) * invoicePageSize,
@@ -172,10 +271,9 @@ export default function AccountsReceivable() {
   );
 
   const exportPDF = () => {
-    const { brand } = useBrand();
-    const logoUrl = "/Logo.png";
     const headerUrl = getHeaderImage(brand);
     const footerUrl = getFooterImage(brand);
+    const logoUrl = "/Logo.png";
     const logoImg = new window.Image();
     const headerImg = new window.Image();
     const footerImg = new window.Image();
@@ -199,15 +297,12 @@ export default function AccountsReceivable() {
     function drawPDF() {
       const doc = new jsPDF();
       const pageWidth = doc.internal.pageSize.getWidth();
-      // Header design asset
       doc.addImage(headerImg, "JPEG", 0, 0, pageWidth, 25);
-      // Centered logo below header
       const logoWidth = 40;
       const logoHeight = 20;
       const logoX = (pageWidth - logoWidth) / 2;
       doc.addImage(logoImg, "PNG", logoX, 27, logoWidth, logoHeight);
 
-      // Header text below logo
       doc.setFontSize(16);
       doc.text("Accounts Receivable Report", pageWidth / 2, 52, {
         align: "center",
@@ -217,40 +312,51 @@ export default function AccountsReceivable() {
         align: "center",
       });
 
-      // Table with color theme
-      autoTable(doc, {
-        head: [["Customer", "Outstanding", "Current", "31-60", "61-90", "90+"]],
-        body: [
-          ...filteredCustomers.map((c) => [
-            c.accountName,
-            `Rs. ${c.outstanding.toLocaleString()}`,
-            `Rs. ${c.current.toLocaleString()}`,
-            `Rs. ${c.days31to60.toLocaleString()}`,
-            `Rs. ${c.days61to90.toLocaleString()}`,
-            `Rs. ${c.days90plus.toLocaleString()}`,
-          ]),
-          [
-            {
-              content: "Totals",
-              colSpan: 1,
-              styles: { halign: "right", fontStyle: "bold" },
-            },
-            `Rs. ${totalOutstanding.toLocaleString()}`,
-            `Rs. ${totalCurrent.toLocaleString()}`,
-            `Rs. ${total30.toLocaleString()}`,
-            `Rs. ${total60.toLocaleString()}`,
-            `Rs. ${total90.toLocaleString()}`,
-          ],
+      const head = [
+        [
+          "Customer",
+          "Opening Dr",
+          "Opening Cr",
+          "Current Dr",
+          "Current Cr",
+          "Closing",
         ],
+      ];
+      const body: RowInput[] = [
+        ...filteredCustomers.map((c) => [
+          c.accountName,
+          fmtRs(c.openingDebit),
+          fmtRs(c.openingCredit),
+          fmtRs(c.currentDebit),
+          fmtRs(c.currentCredit),
+          fmtRs(c.closingBalance),
+        ]),
+        [
+          {
+            content: "Totals",
+            colSpan: 1,
+            styles: { halign: "right", fontStyle: "bold" },
+          },
+          fmtRs(totalOpeningDebit),
+          fmtRs(totalOpeningCredit),
+          fmtRs(totalCurrentDebit),
+          fmtRs(totalCurrentCredit),
+          fmtRs(totalClosing),
+        ],
+      ];
+
+      autoTable(doc, {
+        head,
+        body,
         startY: 65,
         theme: "grid",
         headStyles: {
-          fillColor: [10, 104, 2], // #0A6802
+          fillColor: [10, 104, 2],
           textColor: 255,
           fontStyle: "bold",
         },
         bodyStyles: {
-          fillColor: [241, 252, 240], // #F1FCF0
+          fillColor: [241, 252, 240],
           textColor: 0,
         },
         footStyles: {
@@ -259,7 +365,6 @@ export default function AccountsReceivable() {
           fontStyle: "bold",
         },
         didDrawPage: function (data) {
-          // Footer design asset
           const pageSize = doc.internal.pageSize;
           doc.addImage(
             footerImg,
@@ -282,9 +387,16 @@ export default function AccountsReceivable() {
     }
   };
 
-  const exportInvoicesPDF = (custName: string) => {
+  const exportInvoicesPDF = (customer: ARCustomer) => {
+    const hasDateRange =
+      appliedFromDate.trim() !== "" || appliedToDate.trim() !== "";
     const invs = saleInvoices
-      .filter((inv) => inv.accountTitle === custName)
+      .filter((inv) => {
+        if (!invoiceMatchesCustomer(inv, customer)) return false;
+        if (!hasDateRange) return true;
+        if (!inv.invoiceDate) return false;
+        return invoiceDateInRange(inv, appliedFromDate, appliedToDate);
+      })
       .map((inv) => ({
         invoiceNumber: inv.invoiceNumber ?? "",
         date: inv.invoiceDate?.split("T")[0] ?? "",
@@ -296,10 +408,9 @@ export default function AccountsReceivable() {
           ),
       }));
 
-    const logoUrl = "/Logo.png";
-    const { brand } = useBrand();
     const headerUrl = getHeaderImage(brand);
     const footerUrl = getFooterImage(brand);
+    const logoUrl = "/Logo.png";
     const logoImg = new window.Image();
     const headerImg = new window.Image();
     const footerImg = new window.Image();
@@ -329,9 +440,14 @@ export default function AccountsReceivable() {
       doc.addImage(logoImg, "PNG", logoX, 27, 40, 20);
 
       doc.setFontSize(16);
-      doc.text(`Customer Invoices - ${custName}`, pageWidth / 2, 52, {
-        align: "center",
-      });
+      doc.text(
+        `Customer Invoices - ${customer.accountName}`,
+        pageWidth / 2,
+        52,
+        {
+          align: "center",
+        },
+      );
       doc.setFontSize(10);
       doc.text(`Date: ${new Date().toLocaleDateString()}`, pageWidth / 2, 59, {
         align: "center",
@@ -342,7 +458,7 @@ export default function AccountsReceivable() {
         body: invs.map((i) => [
           i.date,
           i.invoiceNumber,
-          `Rs. ${i.amount.toLocaleString()}`,
+          fmtRs(i.amount),
         ]) as RowInput[],
         startY: 65,
         theme: "grid",
@@ -371,20 +487,9 @@ export default function AccountsReceivable() {
         },
       });
 
-      doc.save(`invoices_${custName}.pdf`);
-    }
-  };
-
-  const renderStatus = (status: InvoiceRow["status"]) => {
-    switch (status) {
-      case "current":
-        return <Badge color="blue">Current</Badge>;
-      case "31-60":
-        return <Badge color="yellow">31-60 Days</Badge>;
-      case "61-90":
-        return <Badge color="orange">61-90 Days</Badge>;
-      case "90+":
-        return <Badge color="red">90+ Days</Badge>;
+      doc.save(
+        `invoices_${String(customer.accountNumber).replace(/[/\\?%*:|"<>]/g, "-")}.pdf`,
+      );
     }
   };
 
@@ -395,7 +500,10 @@ export default function AccountsReceivable() {
           <Text size="xl" fw={700} mb="md">
             Accounts Receivable
           </Text>
-          <Text c="dimmed">Track outstanding balances and aging</Text>
+          <Text c="dimmed">
+            Opening debit/credit from chart of accounts; current debit/credit
+            (last 30 days on the ledger); closing balance is net receivable.
+          </Text>
         </Stack>
         <Button
           leftSection={<Download size={16} />}
@@ -407,59 +515,15 @@ export default function AccountsReceivable() {
       </Group>
 
       <Grid mb="md">
-        <Grid.Col span={2}>
+        <Grid.Col span={{ base: 12, sm: 6, md: 4 }}>
           <Card shadow="sm" p="md" withBorder bg="#F1FCF0">
             <Group>
               <IconArrowUpRight size={30} color="green" />
               <Stack gap={0}>
-                <Text>Outstanding</Text>
-                <Text fw={700}>Rs. {totalOutstanding.toLocaleString()}</Text>
-              </Stack>
-            </Group>
-          </Card>
-        </Grid.Col>
-        <Grid.Col span={2}>
-          <Card shadow="sm" p="md" withBorder bg="#F1FCF0">
-            <Group>
-              <IconArrowUpRight size={30} color="blue" />
-              <Stack gap={0}>
-                <Text>Current</Text>
-                <Text fw={700}>Rs. {totalCurrent.toLocaleString()}</Text>
-              </Stack>
-            </Group>
-          </Card>
-        </Grid.Col>
-        <Grid.Col span={2}>
-          <Card shadow="sm" p="md" withBorder bg="#F1FCF0">
-            <Group>
-              <IconClock size={30} color="#D08700" />
-              <Stack gap={0}>
-                <Text>31-60 Days</Text>
-                <Text fw={700}>Rs. {total30.toLocaleString()}</Text>
-              </Stack>
-            </Group>
-          </Card>
-        </Grid.Col>
-        <Grid.Col span={2}>
-          <Card shadow="sm" p="md" withBorder bg="#F1FCF0">
-            <Group>
-              <IconClock size={30} color="#A86500" />
-              <Stack gap={0}>
-                <Text>61-90 Days</Text>
-                <Text fw={700}>Rs. {total60.toLocaleString()}</Text>
-              </Stack>
-            </Group>
-          </Card>
-        </Grid.Col>
-        <Grid.Col span={2}>
-          <Card shadow="sm" p="md" withBorder bg="#F1FCF0">
-            <Group>
-              <IconAlertCircle size={30} color="red" />
-              <Stack gap={0}>
-                <Text>90+ Days</Text>
-                <Text fw={700} c="red">
-                  Rs. {total90.toLocaleString()}
+                <Text size="sm" c="dimmed">
+                  Total closing (receivable)
                 </Text>
+                <Text fw={700}>{fmtRs(totalClosing)}</Text>
               </Stack>
             </Group>
           </Card>
@@ -469,28 +533,23 @@ export default function AccountsReceivable() {
       <Card shadow="sm" p="md" mb="md" withBorder bg="#F1FCF0">
         <Group grow>
           <TextInput
-            label="Search Customer"
-            placeholder="Search by name"
+            label="Search account"
+            description="Name, code, or e.g. 1410"
+            placeholder="Customer name or account number"
             value={search}
             onChange={(e) => setSearch(e.currentTarget.value)}
           />
-          <Select
-            label="Aging"
-            placeholder="Select bucket"
-            data={["current", "31-60", "61-90", "90+"]}
-            value={agingFilter}
-            onChange={setAgingFilter}
-            clearable
-          />
           <TextInput
             type="date"
-            label="From Date"
+            label="From date (invoices)"
+            description="Applies after Apply filter"
             value={fromDate}
             onChange={(e) => setFromDate(e.currentTarget.value)}
           />
           <TextInput
             type="date"
-            label="To Date"
+            label="To date (invoices)"
+            description="Inclusive end date"
             value={toDate}
             onChange={(e) => setToDate(e.currentTarget.value)}
           />
@@ -507,17 +566,17 @@ export default function AccountsReceivable() {
 
       <Card shadow="sm" p="md" withBorder bg="#F1FCF0">
         <Text fw={600} mb="sm">
-          Customer Receivables Aging
+          Customer receivables
         </Text>
         <Table highlightOnHover withTableBorder striped>
           <Table.Thead>
             <Table.Tr>
               <Table.Th>Customer</Table.Th>
-              <Table.Th>Outstanding</Table.Th>
-              <Table.Th>Current</Table.Th>
-              <Table.Th>31-60</Table.Th>
-              <Table.Th>61-90</Table.Th>
-              <Table.Th>90+</Table.Th>
+              <Table.Th>Opening debit</Table.Th>
+              <Table.Th>Opening credit</Table.Th>
+              <Table.Th>Current debit</Table.Th>
+              <Table.Th>Current credit</Table.Th>
+              <Table.Th>Closing balance</Table.Th>
               <Table.Th>Action</Table.Th>
             </Table.Tr>
           </Table.Thead>
@@ -525,18 +584,12 @@ export default function AccountsReceivable() {
             {paginatedCustomers.map((c) => (
               <Table.Tr key={c.accountNumber}>
                 <Table.Td>{c.accountName}</Table.Td>
-                <Table.Td>
-                  Rs. {Math.abs(c.outstanding).toLocaleString()}
-                </Table.Td>
-                <Table.Td>Rs. {Math.abs(c.current).toLocaleString()}</Table.Td>
-                <Table.Td>
-                  Rs. {Math.abs(c.days31to60).toLocaleString()}
-                </Table.Td>
-                <Table.Td>
-                  Rs. {Math.abs(c.days61to90).toLocaleString()}
-                </Table.Td>
-                <Table.Td>
-                  Rs. {Math.abs(c.days90plus).toLocaleString()}
+                <Table.Td>{fmtRs(c.openingDebit)}</Table.Td>
+                <Table.Td>{fmtRs(c.openingCredit)}</Table.Td>
+                <Table.Td>{fmtRs(c.currentDebit)}</Table.Td>
+                <Table.Td>{fmtRs(c.currentCredit)}</Table.Td>
+                <Table.Td style={{ fontWeight: 600 }}>
+                  {fmtRs(c.closingBalance)}
                 </Table.Td>
                 <Table.Td>
                   <Group gap="xs">
@@ -544,23 +597,23 @@ export default function AccountsReceivable() {
                       size="xs"
                       color="#0A6802"
                       onClick={() =>
-                        setExpandedCustomer(
-                          expandedCustomer === c.accountName
+                        setExpandedAccountNumber(
+                          expandedAccountNumber === c.accountNumber
                             ? null
-                            : c.accountName,
+                            : c.accountNumber,
                         )
                       }
                     >
-                      {expandedCustomer === c.accountName
-                        ? "Hide Details"
-                        : "View Details"}
+                      {expandedAccountNumber === c.accountNumber
+                        ? "Hide invoices"
+                        : "View invoices"}
                     </Button>
                     <Button
                       size="xs"
                       color="blue"
-                      onClick={() => exportInvoicesPDF(c.accountName)}
+                      onClick={() => exportInvoicesPDF(c)}
                     >
-                      Export Invoices
+                      Export invoices
                     </Button>
                   </Group>
                 </Table.Td>
@@ -580,18 +633,24 @@ export default function AccountsReceivable() {
         </Group>
       </Card>
 
-      {expandedCustomer && (
+      {expandedCustomerRow && (
         <Card shadow="sm" p="md" mt="lg" withBorder bg="#F1FCF0">
-          <Text fw={600} mb="sm">
-            Invoice Details — {expandedCustomer}
-          </Text>
+          <Stack gap={4} mb="sm">
+            <Text fw={600}>
+              Invoices — {expandedCustomerRow.accountName}
+            </Text>
+            {(appliedFromDate || appliedToDate) && (
+              <Text size="sm" c="dimmed">
+                Date filter: {appliedFromDate || "…"} → {appliedToDate || "…"}
+              </Text>
+            )}
+          </Stack>
           <Table highlightOnHover withTableBorder striped>
             <Table.Thead>
               <Table.Tr>
                 <Table.Th>Date</Table.Th>
                 <Table.Th>Invoice No.</Table.Th>
                 <Table.Th>Amount</Table.Th>
-                <Table.Th>Status</Table.Th>
               </Table.Tr>
             </Table.Thead>
             <Table.Tbody>
@@ -599,13 +658,12 @@ export default function AccountsReceivable() {
                 <Table.Tr key={i.id}>
                   <Table.Td>{i.date}</Table.Td>
                   <Table.Td>{i.invoiceNumber}</Table.Td>
-                  <Table.Td c="red">Rs. {i.amount.toLocaleString()}</Table.Td>
-                  <Table.Td>{renderStatus(i.status)}</Table.Td>
+                  <Table.Td>{fmtRs(i.amount)}</Table.Td>
                 </Table.Tr>
               ))}
               {expandedInvoicesPaginated.length === 0 && (
                 <Table.Tr>
-                  <Table.Td colSpan={4}>
+                  <Table.Td colSpan={3}>
                     <Text c="dimmed" ta="center">
                       No invoices found.
                     </Text>

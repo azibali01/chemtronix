@@ -170,7 +170,10 @@ export function mapRawToInvoice(invRaw: Record<string, unknown>): Invoice {
       : undefined,
     poNumber: (inv.poNumber as string) ?? undefined,
     poDate: inv.poDate ? String(inv.poDate).slice(0, 10) : undefined,
-    accountNumber: (inv.accountNumber as string) ?? undefined,
+    accountNumber:
+      inv.accountNumber !== undefined && inv.accountNumber !== null
+        ? String(inv.accountNumber).trim()
+        : undefined,
     accountTitle: (inv.accountTitle as string) ?? "",
     saleAccount: saleAccountValue ?? (inv.saleAccount as string) ?? undefined,
     saleAccountTitle:

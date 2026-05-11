@@ -52,15 +52,26 @@ export default function AuditLogs() {
       setError(null);
       try {
         const params: Record<string, string | number> = {
-          page,
+          skip: (page - 1) * limit,
           limit,
         };
         if (actionFilter) params.action = actionFilter;
         if (moduleFilter) params.module = moduleFilter;
 
         const res = await api.get("/audit-logs", { params });
-        setLogs(res.data.data ?? res.data);
-        setTotal(res.data.total ?? res.data.length);
+        const body = res.data as { total?: number; data?: unknown } | unknown[];
+        const rows = Array.isArray(body)
+          ? body
+          : Array.isArray((body as { data?: unknown }).data)
+            ? ((body as { data: AuditEntry[] }).data)
+            : [];
+        const totalCount = Array.isArray(body)
+          ? body.length
+          : typeof (body as { total?: number }).total === "number"
+            ? (body as { total: number }).total
+            : rows.length;
+        setLogs(rows as AuditEntry[]);
+        setTotal(totalCount);
       } catch (err: any) {
         setError(err?.response?.data?.message ?? "Failed to load audit logs");
       } finally {
@@ -71,13 +82,14 @@ export default function AuditLogs() {
     fetchLogs();
   }, [page, actionFilter, moduleFilter]);
 
+  const logList = Array.isArray(logs) ? logs : [];
   const filteredLogs = search
-    ? logs.filter(
+    ? logList.filter(
         (l) =>
-          l.userName.toLowerCase().includes(search.toLowerCase()) ||
-          l.description.toLowerCase().includes(search.toLowerCase()),
+          (l.userName ?? "").toLowerCase().includes(search.toLowerCase()) ||
+          (l.description ?? "").toLowerCase().includes(search.toLowerCase()),
       )
-    : logs;
+    : logList;
 
   return (
     <div style={{ padding: "24px" }}>

@@ -50,7 +50,7 @@ export const DeliveryChallanProviderCompany2: React.FC<{
   const [challans, setChallans] = useState<DeliveryChallanCompany2[]>([]);
 
   const addChallan = (challan: DeliveryChallanCompany2) => {
-    setChallans((prev) => [...prev, challan]);
+    setChallans((prev) => [challan, ...prev]);
   };
 
   const updateChallan = (challan: DeliveryChallanCompany2) => {

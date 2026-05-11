@@ -124,12 +124,21 @@ export default function CashBook() {
   // Get all detail accounts for contra selection
   const detailAccounts = useMemo(() => {
     const flatAccounts = flattenAccounts(chartAccounts);
-    return flatAccounts
-      .filter((acc) => acc.accountCode && acc.accountName)
-      .map((acc) => ({
+    const rows = flatAccounts.filter((acc) => acc.accountCode && acc.accountName);
+    const nameCount = new Map<string, number>();
+    rows.forEach((acc) => {
+      const n = String(acc.accountName);
+      nameCount.set(n, (nameCount.get(n) || 0) + 1);
+    });
+    return rows.map((acc) => {
+      const name = String(acc.accountName);
+      const dup = (nameCount.get(name) || 0) > 1;
+      const label = dup ? `${name} (${String(acc.accountCode)})` : name;
+      return {
         value: acc.accountCode || "",
-        label: `${acc.accountCode} - ${acc.accountName}`,
-      }));
+        label,
+      };
+    });
   }, [chartAccounts, flattenAccounts]);
 
   // Build entries from journal vouchers

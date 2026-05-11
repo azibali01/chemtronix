@@ -12,6 +12,7 @@ import {
   Badge,
   Pagination,
   Stack,
+  Switch,
 } from "@mantine/core";
 import { notifications } from "@mantine/notifications";
 
@@ -54,6 +55,17 @@ function fmtMoney(n: number): string {
   });
 }
 
+function isOpeningBalanceRow(entry: {
+  reference: string;
+  description: string;
+}): boolean {
+  const d = (entry.description || "").toLowerCase();
+  return (
+    entry.reference === "—" &&
+    (d.includes("opening balance") || d.includes("brought forward"))
+  );
+}
+
 /** JV line for the table (API + computed running balance) */
 interface LedgerEntry {
   dateSort: number;
@@ -65,6 +77,10 @@ interface LedgerEntry {
   debitAmount: number;
   creditAmount: number;
   runningBalanceRaw: number;
+  /** Running balance from server (includes opening B/F when requested). */
+  apiRunningBalance?: number;
+  /** Value shown in Balance column (set in displayData). */
+  displayBalance?: number;
 }
 
 /** CoA row for account dropdown + code resolution only */
@@ -97,6 +113,8 @@ export default function GeneralLedger() {
   const [loading, setLoading] = useState(false);
   /** null = initial; after first fetch, always an array (possibly empty) */
   const [backendRows, setBackendRows] = useState<LedgerEntry[] | null>(null);
+  /** B/F row from API (optional From date refines the anchor) */
+  const [includeOpeningBalance, setIncludeOpeningBalance] = useState(false);
 
   // Flatten Chart of Accounts for the account dropdown only (not shown as GL rows)
   useEffect(() => {
@@ -146,6 +164,27 @@ export default function GeneralLedger() {
     setAccountOptions(flattenAccounts(accounts));
   }, [accounts]);
 
+  /** When "All accounts" + opening + search: scope B/F to matching chart account codes. */
+  const openingScopeParam = useMemo(() => {
+    if (!includeOpeningBalance || account) return "";
+    const t = search.trim();
+    if (!t) return "";
+    const lower = t.toLowerCase();
+    const hits = accountOptions.filter(
+      (o) =>
+        o.account.toLowerCase().includes(lower) ||
+        String(o.reference).toLowerCase().includes(lower),
+    );
+    const codes = [
+      ...new Set(
+        hits
+          .map((h) => String(h.reference).split("-")[0].trim())
+          .filter(Boolean),
+      ),
+    ];
+    return codes.length > 0 ? codes.join(",") : "";
+  }, [includeOpeningBalance, account, search, accountOptions]);
+
   const [activePage, setActivePage] = useState(1);
   const pageSize = 10;
 
@@ -155,23 +194,31 @@ export default function GeneralLedger() {
   const displayData = useMemo(() => {
     const filtered = baseData.filter((entry) => {
       const entryDate = new Date(entry.dateSort);
+      const isBf = isOpeningBalanceRow(entry);
 
       const matchesSearch =
         search === "" ||
         entry.account.toLowerCase().includes(search.toLowerCase()) ||
         entry.description.toLowerCase().includes(search.toLowerCase()) ||
         entry.reference.toLowerCase().includes(search.toLowerCase());
+      const passesSearch =
+        matchesSearch || (includeOpeningBalance && isBf);
 
       const matchesAccount = !account || entry.account === account;
       const matchesType =
-        !accountType || entry.type.toLowerCase() === accountType.toLowerCase();
+        !accountType ||
+        (includeOpeningBalance && isBf) ||
+        entry.type.toLowerCase() === accountType.toLowerCase();
 
       const matchesFromDate =
-        !fromDate || entryDate >= startOfDay(fromDate);
-      const matchesToDate = !toDate || entryDate <= endOfDay(toDate);
+        !fromDate ||
+        entryDate >= startOfDay(fromDate) ||
+        (includeOpeningBalance && isBf);
+      const matchesToDate =
+        !toDate || entryDate <= endOfDay(toDate);
 
       return (
-        matchesSearch &&
+        passesSearch &&
         matchesAccount &&
         matchesType &&
         matchesFromDate &&
@@ -179,13 +226,39 @@ export default function GeneralLedger() {
       );
     });
 
-    const sorted = [...filtered].sort((a, b) => a.dateSort - b.dateSort);
+    const sorted = [...filtered].sort((a, b) => {
+      if (a.dateSort !== b.dateSort) return a.dateSort - b.dateSort;
+      const aBf = includeOpeningBalance && isOpeningBalanceRow(a);
+      const bBf = includeOpeningBalance && isOpeningBalanceRow(b);
+      if (aBf && !bBf) return -1;
+      if (!aBf && bBf) return 1;
+      return 0;
+    });
+
     let running = 0;
+    const useApiRunning =
+      includeOpeningBalance &&
+      !!account &&
+      !search.trim() &&
+      !accountType;
+
     return sorted.map((row) => {
       running += row.debitAmount - row.creditAmount;
-      return { ...row, runningBalanceRaw: running };
+      const displayBalance =
+        useApiRunning && typeof row.apiRunningBalance === "number"
+          ? row.apiRunningBalance
+          : running;
+      return { ...row, runningBalanceRaw: running, displayBalance };
     });
-  }, [baseData, search, account, accountType, fromDate, toDate]);
+  }, [
+    baseData,
+    search,
+    account,
+    accountType,
+    fromDate,
+    toDate,
+    includeOpeningBalance,
+  ]);
 
   const fetchLedger = useCallback(async () => {
     const raw = account
@@ -197,6 +270,12 @@ export default function GeneralLedger() {
     const params = new URLSearchParams();
     if (fromDate) params.set("startDate", fromDate.toISOString().split("T")[0]);
     if (toDate) params.set("endDate", toDate.toISOString().split("T")[0]);
+    if (includeOpeningBalance) {
+      params.set("includeOpeningBalance", "true");
+    }
+    if (openingScopeParam) {
+      params.set("openingScope", openingScopeParam);
+    }
 
     const endpoint = accountCode
       ? `/reports/general-ledger/${accountCode}?${params.toString()}`
@@ -213,20 +292,23 @@ export default function GeneralLedger() {
 
       const mapped: LedgerEntry[] = data.map((e) => {
         const d = new Date(e.date);
+        const rb =
+          typeof e.runningBalance === "number" && !Number.isNaN(e.runningBalance)
+            ? e.runningBalance
+            : undefined;
         return {
           dateSort: d.getTime(),
           date: formatLedgerDate(d),
           account: account
             ? `${account}`
-            : e.accountNumber
-              ? `${e.accountNumber}${e.accountName ? ` - ${e.accountName}` : " - Not Found"}`
-              : "",
+            : (e.accountName?.trim() || e.accountNumber || "").trim(),
           type: e.accountType ? e.accountType.toLowerCase() : accountEntryType,
           reference: e.voucherNumber ?? "",
           description: e.description ?? "",
           debitAmount: Number(e.debit) || 0,
           creditAmount: Number(e.credit) || 0,
           runningBalanceRaw: 0,
+          apiRunningBalance: rb,
         };
       });
 
@@ -241,7 +323,14 @@ export default function GeneralLedger() {
     } finally {
       setLoading(false);
     }
-  }, [account, fromDate, toDate, accountOptions]);
+  }, [
+    account,
+    fromDate,
+    toDate,
+    accountOptions,
+    includeOpeningBalance,
+    openingScopeParam,
+  ]);
 
   // Auto-fetch on mount and whenever account or date filters change
   useEffect(() => {
@@ -261,7 +350,8 @@ export default function GeneralLedger() {
   const netBalance = totalDebits - totalCredits;
   const endingRunning =
     displayData.length > 0
-      ? displayData[displayData.length - 1]!.runningBalanceRaw
+      ? (displayData[displayData.length - 1]!.displayBalance ??
+        displayData[displayData.length - 1]!.runningBalanceRaw)
       : 0;
 
   const printLedgerPdf = () => {
@@ -282,6 +372,9 @@ export default function GeneralLedger() {
     const params = new URLSearchParams();
     if (fromDate) params.set("startDate", fromDate.toISOString().split("T")[0]);
     if (toDate) params.set("endDate", toDate.toISOString().split("T")[0]);
+    if (includeOpeningBalance) {
+      params.set("includeOpeningBalance", "true");
+    }
 
     // Attach token + brand so the backend can authorise a plain browser navigation
     const token = localStorage.getItem("access_token") ?? "";
@@ -400,6 +493,25 @@ export default function GeneralLedger() {
       </Grid>
 
       <Card shadow="sm" p="lg" radius="md" withBorder mb="lg" bg="#F1FCF0">
+        <Stack gap="sm" mb="md">
+          <Switch
+            label="Include opening balance (brought forward)"
+            description={
+              fromDate
+                ? account
+                  ? "Net activity before the From date, then period lines."
+                  : "Net of all lines before the From date, then period lines."
+                : account
+                  ? "No From date: opening is net activity before the first day that appears in the list (for the current filters)."
+                  : "No From date: opening is before the first listed day. With All accounts, typing in Search limits the opening line to chart accounts that match the search."
+            }
+            checked={includeOpeningBalance}
+            onChange={(e) =>
+              setIncludeOpeningBalance(e.currentTarget.checked)
+            }
+            color="#0A6802"
+          />
+        </Stack>
         <Group grow>
           <TextInput
             placeholder="Search accounts..."
@@ -484,7 +596,8 @@ export default function GeneralLedger() {
                   liability: "red",
                   equity: "violet",
                 };
-                const rb = entry.runningBalanceRaw;
+                const rb =
+                  entry.displayBalance ?? entry.runningBalanceRaw;
                 const balLabel = `${fmtMoney(Math.abs(rb))} ${rb >= 0 ? "Dr" : "Cr"}`;
                 return (
                   <Table.Tr key={`${entry.dateSort}-${entry.reference}-${index}`}>

@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useMemo } from "react";
 import { useBrand } from "../../Context/BrandContext";
 import { getHeaderImage, getFooterImage } from "../../../utils/assetPaths";
 import {
@@ -67,6 +67,42 @@ export interface Invoice {
 import type { AccountNode as ChartAccountNode } from "../../Context/ChartOfAccountsContext";
 import { getReceivableAccounts } from "../../utils/receivableAccounts";
 type AccountNode = ChartAccountNode;
+
+function newEditInvoiceLineItemId(): string {
+  if (
+    typeof crypto !== "undefined" &&
+    typeof crypto.randomUUID === "function"
+  ) {
+    return crypto.randomUUID();
+  }
+  return `row-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
+}
+
+/** Match stored invoice data to receivable Select `value`s so dropdowns stay populated on edit. */
+function matchReceivableAccountCode(
+  nodes: AccountNode[],
+  accountNumber: string | undefined,
+  accountTitle: string | undefined,
+): string {
+  const rs = getReceivableAccounts(nodes).filter((a) => a.isParty);
+  const raw = accountNumber != null ? String(accountNumber).trim() : "";
+  if (raw) {
+    const byCode = rs.find(
+      (a) => String(a.accountCode ?? a.selectedCode ?? "").trim() === raw,
+    );
+    if (byCode) {
+      return String(byCode.accountCode ?? byCode.selectedCode ?? raw);
+    }
+  }
+  const title = (accountTitle || "").trim();
+  if (title) {
+    const byTitle = rs.find((a) => (a.accountName || "").trim() === title);
+    if (byTitle) {
+      return String(byTitle.accountCode ?? byTitle.selectedCode ?? "");
+    }
+  }
+  return raw;
+}
 
 const saleAccountTitleMap: Record<string, string> = {
   "4114": "Sale Of Chemicals and Equipments",
@@ -308,7 +344,12 @@ export default function SalesInvoicePage() {
         try {
           setInvoicesLoading(true);
           const response = await api.get("/sale-invoice");
-          setInvoices(response.data);
+          const mapped = Array.isArray(response.data)
+            ? (response.data as unknown[]).map((invRaw) =>
+                mapRawToInvoice(invRaw as Record<string, unknown>),
+              )
+            : [];
+          setInvoices(mapped);
         } catch (error) {
           console.error("Failed to fetch invoices:", error);
         } finally {
@@ -408,6 +449,25 @@ export default function SalesInvoicePage() {
     fetchProductCodes();
   }, []);
 
+  const productCodeSelectOptions = useMemo(
+    () =>
+      Array.from(
+        new Map(
+          productCodes.map((p) => [
+            String(p.value),
+            {
+              value: String(p.value),
+              label: p.label,
+              productName: p.productName,
+              description: p.description,
+              rate: p.rate,
+            },
+          ]),
+        ).values(),
+      ),
+    [productCodes],
+  );
+
   const salesAccountOptions = getSalesAccounts(accounts)
     .sort((a, b) => a.label.localeCompare(b.label))
     .map((a) => ({
@@ -423,14 +483,12 @@ export default function SalesInvoicePage() {
     setInvoicesLoading(true);
     try {
       const response = await api.get("/sale-invoice");
-      // Map backend 'products' to frontend 'items' for table compatibility
       const mapped = Array.isArray(response.data)
         ? (response.data as unknown[]).map((invRaw) =>
             mapRawToInvoice(invRaw as Record<string, unknown>),
           )
         : [];
       setInvoices(mapped);
-      // update the generated invoice number from the latest invoices
       setNewInvoiceNumber(getNextInvoiceNumber(mapped));
       return mapped;
     } catch (error) {
@@ -493,15 +551,8 @@ export default function SalesInvoicePage() {
       const response = await api.post("/sale-invoice", payload);
 
       if (response.data) {
-        // Map the backend response to our Invoice shape and add to state
-        const mappedNew = mapRawToInvoice(
-          response.data as Record<string, unknown>,
-        );
-        setInvoices((prev) => {
-          const next: Invoice[] = [mappedNew, ...prev];
-          setNewInvoiceNumber(getNextInvoiceNumber(next));
-          return next;
-        });
+        setSearchInput("");
+        await fetchSalesInvoices();
 
         notifications.show({
           title: "Success",
@@ -546,7 +597,7 @@ export default function SalesInvoicePage() {
   // Update an existing sales invoice
   const updateSalesInvoice = async (invoiceData: Invoice) => {
     try {
-      // Map frontend InvoiceItem fields → backend DTO product fields
+      // Map frontend InvoiceItem → UpdateSaleInvoiceDto.products (no extra keys; strict backend whitelist)
       const products = (invoiceData.items || []).map((item) => {
         const gstPct =
           brand !== "hydroworx"
@@ -555,11 +606,12 @@ export default function SalesInvoicePage() {
         const exGstAmount = item.qty * item.rate;
         const gstAmount = (exGstAmount * gstPct) / 100;
         const netAmount = exGstAmount + gstAmount;
+        const codeDigits = String(item.code || "").match(/\d+/)?.[0];
+        const numericCode = codeDigits ? Number(codeDigits) : Number(item.code);
         return {
-          code: item.code,
+          code: numericCode,
           productName: item.product,
           hsCode: item.hsCode,
-          description: item.description,
           quantity: item.qty,
           rate: item.rate,
           gstPercent: gstPct,
@@ -570,13 +622,20 @@ export default function SalesInvoicePage() {
       });
 
       const payload = {
-        ...invoiceData,
-        // Backend DTO uses 'account', Invoice type uses 'accountNumber'
+        computerNumber: invoiceData.invoiceNumber,
+        invoiceNumber: invoiceData.invoiceNumber,
+        invoiceDate: invoiceData.invoiceDate,
+        deliveryNumber: invoiceData.deliveryNumber || undefined,
+        deliveryDate: invoiceData.deliveryDate || undefined,
+        poNumber: invoiceData.poNumber || undefined,
+        poDate: invoiceData.poDate || undefined,
         account: invoiceData.accountNumber || "",
+        accountTitle: invoiceData.accountTitle,
+        saleAccount: invoiceData.saleAccount || "",
+        saleAccountTitle: invoiceData.saleAccountTitle || "",
+        ntnNumber: invoiceData.ntnNumber || undefined,
+        strnNumber: invoiceData.strnNumber || undefined,
         products,
-        amount: editTotal,
-        netAmount: editNetAmount,
-        province,
       };
 
       const response = await api.put(
@@ -585,67 +644,7 @@ export default function SalesInvoicePage() {
       );
 
       if (response.data) {
-        const res = response.data as Record<string, unknown>;
-        const itemsSource = Array.isArray(res.products)
-          ? res.products
-          : Array.isArray(res.items)
-            ? res.items
-            : Array.isArray(invoiceData.items)
-              ? invoiceData.items
-              : [];
-
-        const updatedInvoice: Invoice = {
-          id: res._id ? String(res._id) : String(res.id ?? invoiceData.id),
-          invoiceNumber:
-            (res.invoiceNumber as string) ??
-            (res.number as string) ??
-            invoiceData.invoiceNumber,
-          invoiceDate: res.invoiceDate
-            ? String(res.invoiceDate).slice(0, 10)
-            : invoiceData.invoiceDate,
-          deliveryNumber: res.deliveryNumber ?? invoiceData.deliveryNumber,
-          deliveryDate: res.deliveryDate
-            ? String(res.deliveryDate).slice(0, 10)
-            : invoiceData.deliveryDate,
-          poNumber: res.poNumber ?? invoiceData.poNumber,
-          poDate: res.poDate
-            ? String(res.poDate).slice(0, 10)
-            : invoiceData.poDate,
-          accountNumber: res.accountNumber ?? invoiceData.accountNumber,
-          accountTitle: res.accountTitle ?? invoiceData.accountTitle,
-          saleAccount: res.saleAccount ?? invoiceData.saleAccount,
-          saleAccountTitle:
-            res.saleAccountTitle ?? invoiceData.saleAccountTitle,
-          ntnNumber: res.ntnNumber ?? invoiceData.ntnNumber,
-          amount:
-            typeof res.amount === "number"
-              ? res.amount
-              : typeof res.netAmount === "number"
-                ? res.netAmount
-                : invoiceData.amount,
-          netAmount:
-            typeof res.netAmount === "number"
-              ? res.netAmount
-              : invoiceData.netAmount,
-          province:
-            (res.province as string | undefined) ?? invoiceData.province,
-          items: itemsSource.map((it: unknown) => {
-            const obj = (it as Record<string, unknown>) || {};
-            return {
-              ...obj,
-              id:
-                obj.id !== undefined
-                  ? String(obj.id)
-                  : obj._id !== undefined
-                    ? String(obj._id)
-                    : String(Math.random()),
-            } as InvoiceItem;
-          }),
-        } as Invoice;
-
-        setInvoices((prev) =>
-          prev.map((inv) => (inv.id === invoiceData.id ? updatedInvoice : inv)),
-        );
+        await fetchSalesInvoices();
 
         notifications.show({
           title: "Success",
@@ -690,9 +689,7 @@ export default function SalesInvoicePage() {
     try {
       await api.delete(`/sale-invoice/${invoiceId}`);
 
-      setInvoices((prev) =>
-        prev.filter((i) => String(i.id) !== String(invoiceId)),
-      );
+      await fetchSalesInvoices();
 
       notifications.show({
         title: "Success",
@@ -1595,13 +1592,19 @@ export default function SalesInvoicePage() {
                         <ActionIcon
                           color="#0A6802"
                           variant="light"
-                          onClick={() =>
-                            setEditInvoice(
-                              mapRawToInvoice(
-                                i as unknown as Record<string, unknown>,
+                          onClick={() => {
+                            const mapped = mapRawToInvoice(
+                              i as unknown as Record<string, unknown>,
+                            );
+                            setEditInvoice({
+                              ...mapped,
+                              accountNumber: matchReceivableAccountCode(
+                                accounts as AccountNode[],
+                                mapped.accountNumber,
+                                mapped.accountTitle,
                               ),
-                            )
-                          }
+                            });
+                          }}
                         >
                           <IconPencil size={16} />
                         </ActionIcon>
@@ -1829,20 +1832,7 @@ export default function SalesInvoicePage() {
                     <Table.Td>
                       <Select
                         placeholder="Product Code"
-                        data={Array.from(
-                          new Map(
-                            productCodes.map((p) => [
-                              String(p.value),
-                              {
-                                value: String(p.value),
-                                label: p.label,
-                                productName: p.productName,
-                                description: p.description,
-                                rate: p.rate,
-                              },
-                            ]),
-                          ).values(),
-                        )}
+                        data={productCodeSelectOptions}
                         value={item.code}
                         onChange={(v) => {
                           const selected = productCodes.find(
@@ -2124,9 +2114,13 @@ export default function SalesInvoicePage() {
                   label="Account Number"
                   placeholder="Select Account Number"
                   data={uniqueAccountNoOptions}
-                  value={editInvoice.accountNumber || ""}
+                  value={editInvoice.accountNumber || null}
                   onChange={(v) => {
-                    const acc = accounts.find((a) => a.selectedCode === v);
+                    const acc = receivablesAccounts.find(
+                      (a: AccountNode) =>
+                        String(a.accountCode ?? a.selectedCode ?? "") ===
+                        String(v ?? ""),
+                    );
                     setEditInvoice({
                       ...editInvoice,
                       accountNumber: v || "",
@@ -2141,13 +2135,17 @@ export default function SalesInvoicePage() {
                   label="Account Title"
                   placeholder="Select Account Title"
                   data={uniqueAccountTitleOptions}
-                  value={editInvoice.accountTitle || ""}
+                  value={editInvoice.accountTitle || null}
                   onChange={(v) => {
-                    const acc = accounts.find((a) => a.accountName === v);
+                    const acc = receivablesAccounts.find(
+                      (a: AccountNode) => a.accountName === v,
+                    );
                     setEditInvoice({
                       ...editInvoice,
                       accountTitle: v || "",
-                      accountNumber: acc?.selectedCode || "",
+                      accountNumber: acc
+                        ? String(acc.accountCode ?? acc.selectedCode ?? "")
+                        : "",
                       ntnNumber: acc?.ntn || "",
                       strnNumber: acc?.strn || "",
                     });
@@ -2234,16 +2232,28 @@ export default function SalesInvoicePage() {
                     return (
                       <Table.Tr key={item.id}>
                         <Table.Td>
-                          <TextInput
-                            value={item.code}
-                            onChange={(e) => {
+                          <Select
+                            placeholder="Product Code"
+                            data={productCodeSelectOptions}
+                            value={item.code || null}
+                            onChange={(v) => {
+                              const selected = productCodes.find(
+                                (p) => String(p.value) === v,
+                              );
                               const newItems = [...(editInvoice.items || [])];
-                              newItems[index].code = e.currentTarget.value;
+                              newItems[index].code = v || "";
+                              newItems[index].product =
+                                selected?.productName || "";
+                              newItems[index].description =
+                                selected?.description || "";
+                              newItems[index].rate = selected?.rate || 0;
                               setEditInvoice({
                                 ...editInvoice,
                                 items: newItems,
                               });
                             }}
+                            searchable
+                            clearable
                           />
                         </Table.Td>
                         <Table.Td>
@@ -2269,7 +2279,7 @@ export default function SalesInvoicePage() {
                               { value: "8413", label: "8413 Pumps" },
                               { value: "9833", label: "9833 Service" },
                             ]}
-                            value={item.hsCode}
+                            value={item.hsCode || null}
                             onChange={(v) => {
                               const newItems = [...(editInvoice.items || [])];
                               newItems[index].hsCode = v || "";
@@ -2278,6 +2288,7 @@ export default function SalesInvoicePage() {
                                 items: newItems,
                               });
                             }}
+                            clearable
                           />
                         </Table.Td>
                         <Table.Td>
@@ -2364,7 +2375,7 @@ export default function SalesInvoicePage() {
                     items: [
                       ...(editInvoice.items || []),
                       {
-                        id: String((editInvoice.items?.length || 0) + 1),
+                        id: newEditInvoiceLineItemId(),
                         code: "",
                         product: "",
                         hsCode: "",
