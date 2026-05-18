@@ -11,6 +11,8 @@ export type DeliveryItem = {
   length: string;
   width: string;
   qty: string;
+  /** Client-only stable key for React lists; not sent to the API. */
+  lineKey?: string;
 };
 
 export type DeliveryChallan = {
@@ -118,9 +120,7 @@ export const DeliveryChallanProvider: React.FC<{
         challan,
       );
 
-      setChallans((prev) =>
-        prev.map((c) => (c.id === challan.id ? response.data : c)),
-      );
+      await fetchChallans();
       notifications.show({
         title: "Success",
         message: "Delivery challan updated successfully",

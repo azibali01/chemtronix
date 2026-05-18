@@ -43,6 +43,7 @@ import { PrintableChallan } from "./PrintableChallan";
 import { getReceivableAccounts } from "../../utils/receivableAccounts";
 import api from "../../../api_configuration/api";
 import { useDebounce } from "../../../hooks/useDebounce";
+import { createLineItemKey } from "../../../utils/lineItemKey";
 
 type ProductLookup = {
   code: string;
@@ -63,6 +64,27 @@ function getNextChallanNumber(challans: DeliveryChallan[]): string {
   const max = Math.max(...numbers, 0);
   const next = max + 1;
   return `DC-${next.toString().padStart(4, "0")}`;
+}
+
+function withLineKeys(items: DeliveryItem[]): DeliveryItem[] {
+  return items.map((item) => ({
+    ...item,
+    lineKey: item.lineKey || createLineItemKey(),
+  }));
+}
+
+/** Payload shape expected by the API (numeric qty, no client-only fields). */
+function itemsForApi(items: DeliveryItem[]) {
+  return items.map((item, idx) => ({
+    sr: idx + 1,
+    itemCode: String(item.itemCode ?? "").trim(),
+    particulars: String(item.particulars ?? "").trim(),
+    unit: String(item.unit ?? "").trim() || "Nos",
+    length: String(item.length ?? ""),
+    width: String(item.width ?? ""),
+    qty: Number(item.qty) || 0,
+    amount: Number(item.amount) || 0,
+  }));
 }
 
 function DeliveryChallansInner() {
@@ -272,7 +294,7 @@ function DeliveryChallansInner() {
     setPartyAddress(row.partyAddress);
     setDeliveryDate(row.deliveryDate);
     setStatus(row.status);
-    setItems(row.items || []);
+    setItems(withLineKeys(row.items || []));
     setOpened(true);
   };
 
@@ -296,7 +318,7 @@ function DeliveryChallansInner() {
       date: new Date().toISOString().slice(0, 10),
       deliveryDate,
       status,
-      items: [...items],
+      items: itemsForApi(items),
     };
 
     try {
@@ -330,6 +352,7 @@ function DeliveryChallansInner() {
       const newItems = [
         ...prev,
         {
+          lineKey: createLineItemKey(),
           sr: prev.length + 1,
           itemCode: "",
           particulars: "",
@@ -337,10 +360,9 @@ function DeliveryChallansInner() {
           length: "",
           width: "",
           qty: "",
-          amount: 0, // <-- Add this line to match DeliveryItem type
+          amount: 0,
         },
       ];
-      // Recalculate SR for all items
       return newItems.map((item, idx) => ({
         ...item,
         sr: idx + 1,
@@ -1103,12 +1125,13 @@ function DeliveryChallansInner() {
                   </Table.Thead>
                   <Table.Tbody>
                     {items.map((item, idx) => (
-                      <Table.Tr key={idx}>
+                      <Table.Tr key={item.lineKey ?? `row-${idx}`}>
                         <Table.Td style={{ textAlign: "center" }}>
                           {item.sr}
                         </Table.Td>
                         <Table.Td>
                           <Autocomplete
+                            key={`code-${item.lineKey ?? idx}`}
                             value={item.itemCode ?? ""}
                             data={productCodeOptions}
                             onChange={(value) =>
@@ -1119,6 +1142,7 @@ function DeliveryChallansInner() {
                         </Table.Td>
                         <Table.Td>
                           <Autocomplete
+                            key={`part-${item.lineKey ?? idx}`}
                             value={item.particulars ?? ""}
                             data={productNameOptions}
                             onChange={(value) =>

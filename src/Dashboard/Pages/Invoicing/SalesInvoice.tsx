@@ -1,6 +1,11 @@
 import { useState, useRef, useEffect, useMemo } from "react";
 import { useBrand } from "../../Context/BrandContext";
-import { getHeaderImage, getFooterImage } from "../../../utils/assetPaths";
+import {
+  getHeaderImage,
+  getFooterImage,
+  getCompanyTaxProfile,
+  type CompanyTaxProfile,
+} from "../../../utils/assetPaths";
 import {
   Card,
   Text,
@@ -14,6 +19,8 @@ import {
   Textarea,
   Select,
   Pagination,
+  Radio,
+  Stack,
 } from "@mantine/core";
 import {
   IconPlus,
@@ -30,6 +37,11 @@ import { useChartOfAccounts } from "../../Context/ChartOfAccountsContext";
 import api from "../../../api_configuration/api";
 import { notifications } from "@mantine/notifications";
 import { useDebounce } from "../../../hooks/useDebounce";
+import { createLineItemKey } from "../../../utils/lineItemKey";
+import {
+  buildChemtronicsInvoicePrintHtml,
+  type InvoicePrintKind,
+} from "../../../utils/chemtronicsInvoicePrintHtml";
 
 export interface InvoiceItem {
   id: string;
@@ -130,6 +142,33 @@ function getTaxRate(hsCode: string, province: "Punjab" | "Sindh") {
   return 18;
 }
 
+function resolveCompanyTaxProfile(
+  brand: string,
+  accounts: AccountNode[],
+): CompanyTaxProfile {
+  const base = getCompanyTaxProfile(brand);
+  if (base.ntn && base.strn) return base;
+
+  const needle = brand === "hydroworx" ? "hydroworx" : "chemtronix";
+  let found: AccountNode | undefined;
+  const walk = (nodes: AccountNode[]) => {
+    for (const n of nodes) {
+      const name = (n.accountName || "").toLowerCase();
+      if (name.includes(needle) && (n.ntn || n.strn)) {
+        found = n;
+        return;
+      }
+      if (n.children?.length) walk(n.children as AccountNode[]);
+    }
+  };
+  walk(accounts);
+  return {
+    legalName: base.legalName,
+    ntn: base.ntn || String(found?.ntn ?? ""),
+    strn: base.strn || String(found?.strn ?? ""),
+  };
+}
+
 function addHeaderFooter(doc: jsPDF, title: string) {
   doc.setFontSize(18);
   doc.text("CHEMTRONIX ENGINEERING SOLUTION", 14, 14);
@@ -190,11 +229,17 @@ function PrintableInvoice({ invoice }: { invoice: Invoice | null }) {
       <p>Amount: PKR {invoice.amount?.toFixed(2)}</p>
 
       {/* Footer banner */}
-      <div style={{ marginTop: 18 }}>
+      <div style={{ marginTop: 18, marginLeft: -24, width: "calc(100% + 48px)" }}>
         <img
           src={getFooterImage(brand)}
           alt="Footer"
-          style={{ width: "100%", height: "auto" }}
+          style={{
+            display: "block",
+            width: "100%",
+            height: "auto",
+            maxHeight: 140,
+            objectFit: "cover",
+          }}
         />
       </div>
     </div>
@@ -362,7 +407,7 @@ export default function SalesInvoicePage() {
 
   const [items, setItems] = useState<InvoiceItem[]>([
     {
-      id: "1",
+      id: createLineItemKey(),
       code: "",
       product: "",
       hsCode: "",
@@ -381,6 +426,11 @@ export default function SalesInvoicePage() {
 
   const [currentInvoiceForPrint, setCurrentInvoiceForPrint] =
     useState<Invoice | null>(null);
+  const [printModalOpen, setPrintModalOpen] = useState(false);
+  const [invoicePendingPrint, setInvoicePendingPrint] =
+    useState<Invoice | null>(null);
+  const [printInvoiceKind, setPrintInvoiceKind] =
+    useState<InvoicePrintKind>("sales");
 
   const [productCodes, setProductCodes] = useState<
     {
@@ -731,7 +781,7 @@ export default function SalesInvoicePage() {
     setProvince("Punjab");
     setItems([
       {
-        id: "1",
+        id: createLineItemKey(),
         code: "",
         product: "",
         hsCode: "",
@@ -1001,247 +1051,29 @@ export default function SalesInvoicePage() {
     doc.save(`invoice_${invoice.invoiceNumber}.pdf`);
   };
 
-  // Helper to set invoice for printing (used by UI buttons)
-  const handlePrintInvoice = (invoice: Invoice) => {
+  const openPrintInvoiceDialog = (invoice: Invoice) => {
+    setInvoicePendingPrint(invoice);
+    setPrintInvoiceKind("sales");
+    setPrintModalOpen(true);
+  };
+
+  // Opens print window with Commercial or Sales heading (same layout)
+  const executeInvoicePrint = (
+    invoice: Invoice,
+    kind: InvoicePrintKind = "sales",
+  ) => {
     // set a minimal current invoice for the hidden print template and trigger window.print()
     // also store invoice into hidden print template state so DOM-based printing can use it
     setCurrentInvoiceForPrint(invoice);
     try {
-      // Generate a standalone HTML string for the invoice and open it in a new window
-      const itemsList = invoice.items || [];
-      const subtotal = itemsList.reduce(
-        (s, it) => s + (it.qty || 0) * (it.rate || 0),
-        0,
-      );
-      const salesTax = itemsList.reduce(
-        (s, it) =>
-          s +
-          ((it.qty || 0) *
-            (it.rate || 0) *
-            getTaxRate(it.hsCode, invoice.province || "Punjab")) /
-            100,
-        0,
-      );
-      const discount = 0;
-      const grandTotal = subtotal + salesTax - discount;
-
-      // small helper to convert number to words (rounded, uppercase)
-      function numberToWordsLocal(num: number) {
-        if (!num) return "ZERO";
-        const a = [
-          "",
-          "one",
-          "two",
-          "three",
-          "four",
-          "five",
-          "six",
-          "seven",
-          "eight",
-          "nine",
-          "ten",
-          "eleven",
-          "twelve",
-          "thirteen",
-          "fourteen",
-          "fifteen",
-          "sixteen",
-          "seventeen",
-          "eighteen",
-          "nineteen",
-        ];
-        const b = [
-          "",
-          "",
-          "twenty",
-          "thirty",
-          "forty",
-          "fifty",
-          "sixty",
-          "seventy",
-          "eighty",
-          "ninety",
-        ];
-        function inWords(n: number): string {
-          if (n < 20) return a[n];
-          if (n < 100)
-            return b[Math.floor(n / 10)] + (n % 10 ? " " + a[n % 10] : "");
-          if (n < 1000)
-            return (
-              a[Math.floor(n / 100)] +
-              " hundred" +
-              (n % 100 ? " " + inWords(n % 100) : "")
-            );
-          if (n < 1000000)
-            return (
-              inWords(Math.floor(n / 1000)) +
-              " thousand" +
-              (n % 1000 ? " " + inWords(n % 1000) : "")
-            );
-          return (
-            inWords(Math.floor(n / 1000000)) +
-            " million" +
-            (n % 1000000 ? " " + inWords(n % 1000000) : "")
-          );
-        }
-        return inWords(Math.round(num)).toUpperCase();
-      }
-
-      // build HTML rows for items and padding rows to expand the body like the screenshot
-      const _itemsForRows = invoice.items || [];
-      const itemsRows = _itemsForRows
-        .map((item, idx) => {
-          const gst = getTaxRate(item.hsCode, invoice.province || "Punjab");
-          const net = (item.qty || 0) * (item.rate || 0);
-          return `<tr>
-                      <td align="center">${idx + 1}</td>
-                      <td align="center">${(
-                        item.product ||
-                        item.description ||
-                        item.code ||
-                        ""
-                      ).replace(/</g, "&lt;")}</td>
-                      <td align="center">${item.hsCode || ""}</td>
-                      <td align="center">${gst.toFixed(2)}</td>
-                      <td align="center">${(item.rate || 0).toFixed(2)}</td>
-                      <td align="center">${(item.qty || 0).toFixed(2)}</td>
-                      <td class="right">PKR ${net.toFixed(2)}</td>
-                    </tr>`;
-        })
-        .join("");
-
-      // Keep one fewer filler row so totals and footer stay on the first printed page.
-      const desiredRows = 7;
-      const paddingCount = Math.max(0, desiredRows - _itemsForRows.length);
-      const paddingRows = Array.from({ length: paddingCount })
-        .map(() => {
-          return `<tr>
-                    <td align="center">&nbsp;</td>
-                    <td align="center">&nbsp;</td>
-                    <td align="center">&nbsp;</td>
-                    <td align="center">&nbsp;</td>
-                    <td align="center">&nbsp;</td>
-                    <td align="center">&nbsp;</td>
-                    <td class="right">&nbsp;</td>
-                  </tr>`;
-        })
-        .join("");
-
-      const rowsHtml = itemsRows + paddingRows;
-
-      const headerImageUrl = getHeaderImage(brand);
-      const footerImageUrl = getFooterImage(brand);
-
-      const html = `<!doctype html>
-        <html>
-        <head>
-          <meta charset="utf-8" />
-          <title>Invoice ${invoice.invoiceNumber}</title>
-          <style>
-            @page { size: A4 portrait; margin: 8mm; }
-            html, body { margin: 0; padding: 0; }
-            body { font-family: Arial, sans-serif; color: #222; }
-            .page { padding: 24px; box-sizing: border-box; }
-            .header { display:flex; align-items:center; gap:12px; }
-            .company { color: #0A6802; font-weight:700; font-size:18px; }
-            .meta { margin-top: 12px; display: flex; justify-content: space-between; gap:12px; }
-            .box { border: 1px solid #222; padding: 8px; }
-            /* Table styling to match screenshot: strong outer border, gray header, blue header text */
-            table { width: 100%; border-collapse: collapse; margin-top: 12px; border: 2px solid #000; }
-            /* Use full 1px borders on all cells so vertical column borders appear */
-            th, td { border: 1px solid #000; padding: 8px; font-size: 12px; vertical-align: top; }
-            /* Wider description column */
-            thead th:nth-child(2), tbody td:nth-child(2) { width: 40%; }
-            thead th { background: #e9e9e9; color: #0B4AA6; font-weight: 700; border-bottom: 1px solid #000; }
-            thead th:first-child { border-left: 1px solid #000; border-top-left-radius: 6px; }
-            thead th:last-child { border-right: 1px solid #000; border-top-right-radius: 6px; }
-            tbody td:first-child { border-left: 1px solid #000; }
-            tbody tr { height: 48px; }
-            tbody td:last-child { border-right: 1px solid #000; }
-            .totals { margin-top: 12px; width: 100%; display: flex; justify-content: flex-end; }
-            .totals .block { width: 320px; border: 1px solid #222; padding: 12px; }
-            .totals, .totals .block, .footer { break-inside: avoid; page-break-inside: avoid; }
-            .right { text-align: right; }
-            .muted { color: #666; font-size: 12px; }
-          </style>
-        </head>
-        <body>
-          <div class="page">
-          <div class="header" style="padding:0;">
-            <img src="${headerImageUrl}" alt="Header" style="display:block; width:calc(100% + 48px);  height:auto;  object-fit: cover;" />
-          </div>
-          <div class="meta">
-            <div class="box" style="flex:1; margin-right:8px;">
-              <div><strong>Title:</strong> ${invoice.accountTitle || ""}</div>
-              <div><strong>NTN:</strong> ${invoice.ntnNumber || ""}</div>
-              <div><strong>STRN:</strong> ${invoice.strnNumber || ""}</div>
-            </div>
-            <div style="width:320px;">
-              <div class="box">
-                <div><strong>Invoice No:</strong> ${invoice.invoiceNumber}</div>
-                <div><strong>Invoice Date:</strong> ${invoice.invoiceDate}</div>
-                <div><strong>Delivery No:</strong> ${
-                  invoice.deliveryNumber || ""
-                }</div>
-                <div><strong>Delivery Date:</strong> ${
-                  invoice.deliveryDate || ""
-                }</div>
-                <div><strong>PO No:</strong> ${invoice.poNumber || ""}</div>
-              </div>
-            </div>
-          </div>
-
-          <table>
-            <thead>
-              <tr>
-                <th>SR No</th>
-                <th>Description</th>
-                <th>HS Code</th>
-                <th>GST %</th>
-                <th>Rate</th>
-                <th>Qty</th>
-                <th>Net Amount</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${rowsHtml}
-            </tbody>
-          </table>
-
-          <div style="margin-top:8px; font-size:12px; color:#666;">*Computer generated invoice. No need for signature</div>
-
-          <div class="totals">
-            <div class="block">
-              <div style="display:flex; justify-content:space-between;">
-                <div>Gross Total:</div>
-                <div>PKR ${subtotal.toFixed(2)}</div>
-              </div>
-              <div style="display:flex; justify-content:space-between;">
-                <div>Sales Tax:</div>
-                <div>PKR ${salesTax.toFixed(2)}</div>
-              </div>
-              <div style="display:flex; justify-content:space-between;">
-                <div>Discount:</div>
-                <div>PKR 0.00</div>
-              </div>
-              <hr />
-              <div style="display:flex; justify-content:space-between; font-weight:bold;">
-                <div>Grand Total Inclusive Tax:</div>
-                <div>PKR ${grandTotal.toFixed(2)}</div>
-              </div>
-              <div style="margin-top:10px; font-size:12px;">Amount in words: ${numberToWordsLocal(
-                Math.round(grandTotal),
-              )}</div>
-            </div>
-          </div>
-
-          <div style="margin-top:18px;" class="footer">
-            <img src="${footerImageUrl}" alt="Footer" style="width:100%; height:auto; max-height:120px; object-fit:contain;" />
-          </div>
-          </div>
-
-        </body>
-        </html>`;
+      const company = resolveCompanyTaxProfile(brand, accounts);
+      const html = buildChemtronicsInvoicePrintHtml({
+        invoice,
+        kind,
+        brand,
+        company,
+        accounts,
+      });
 
       const w = window.open("", "_blank");
       if (!w) return;
@@ -1838,13 +1670,19 @@ export default function SalesInvoicePage() {
                           const selected = productCodes.find(
                             (p) => String(p.value) === v,
                           );
-                          const newItems = [...items];
-                          newItems[index].code = v || "";
-                          newItems[index].product = selected?.productName || "";
-                          newItems[index].description =
-                            selected?.description || "";
-                          newItems[index].rate = selected?.rate || 0;
-                          setItems(newItems);
+                          setItems((prev) =>
+                            prev.map((row, i) =>
+                              i === index
+                                ? {
+                                    ...row,
+                                    code: v || "",
+                                    product: selected?.productName || "",
+                                    description: selected?.description || "",
+                                    rate: selected?.rate || 0,
+                                  }
+                                : row,
+                            ),
+                          );
                         }}
                         searchable
                       />
@@ -1854,9 +1692,12 @@ export default function SalesInvoicePage() {
                         placeholder="Product"
                         value={item.product}
                         onChange={(e) => {
-                          const newItems = [...items];
-                          newItems[index].product = e.currentTarget.value;
-                          setItems(newItems);
+                          const value = e.currentTarget.value;
+                          setItems((prev) =>
+                            prev.map((row, i) =>
+                              i === index ? { ...row, product: value } : row,
+                            ),
+                          );
                         }}
                       />
                     </Table.Td>
@@ -1871,9 +1712,11 @@ export default function SalesInvoicePage() {
                         ]}
                         value={item.hsCode}
                         onChange={(v) => {
-                          const newItems = [...items];
-                          newItems[index].hsCode = v || "";
-                          setItems(newItems);
+                          setItems((prev) =>
+                            prev.map((row, i) =>
+                              i === index ? { ...row, hsCode: v || "" } : row,
+                            ),
+                          );
                         }}
                       />
                     </Table.Td>
@@ -1882,9 +1725,14 @@ export default function SalesInvoicePage() {
                         placeholder="Description"
                         value={item.description}
                         onChange={(e) => {
-                          const newItems = [...items];
-                          newItems[index].description = e.currentTarget.value;
-                          setItems(newItems);
+                          const value = e.currentTarget.value;
+                          setItems((prev) =>
+                            prev.map((row, i) =>
+                              i === index
+                                ? { ...row, description: value }
+                                : row,
+                            ),
+                          );
                         }}
                       />
                     </Table.Td>
@@ -1893,9 +1741,13 @@ export default function SalesInvoicePage() {
                         value={item.qty}
                         min={1}
                         onChange={(val) => {
-                          const newItems = [...items];
-                          newItems[index].qty = Number(val) || 0;
-                          setItems(newItems);
+                          setItems((prev) =>
+                            prev.map((row, i) =>
+                              i === index
+                                ? { ...row, qty: Number(val) || 0 }
+                                : row,
+                            ),
+                          );
                         }}
                         error={fieldErrors[`items.${index}.qty`]}
                       />
@@ -1905,9 +1757,13 @@ export default function SalesInvoicePage() {
                         value={item.rate}
                         min={0}
                         onChange={(val) => {
-                          const newItems = [...items];
-                          newItems[index].rate = Number(val) || 0;
-                          setItems(newItems);
+                          setItems((prev) =>
+                            prev.map((row, i) =>
+                              i === index
+                                ? { ...row, rate: Number(val) || 0 }
+                                : row,
+                            ),
+                          );
                         }}
                         error={fieldErrors[`items.${index}.rate`]}
                       />
@@ -1951,7 +1807,7 @@ export default function SalesInvoicePage() {
               setItems((prev) => [
                 ...prev,
                 {
-                  id: String(prev.length + 1),
+                  id: createLineItemKey(),
                   code: "",
                   product: "",
                   hsCode: "",
@@ -2000,11 +1856,17 @@ export default function SalesInvoicePage() {
               variant="outline"
               color="#819E00"
               onClick={() => {
-                handlePrintInvoice({
+                openPrintInvoiceDialog({
                   id: String(invoices.length + 1),
                   invoiceNumber: newInvoiceNumber,
                   invoiceDate: newInvoiceDate,
                   accountTitle: newAccountTitle,
+                  ntnNumber: newNtnNumber,
+                  strnNumber: newStrnNumber,
+                  deliveryNumber: newDeliveryNumber,
+                  deliveryDate: newDeliveryDate,
+                  poNumber: newPoNumber,
+                  province,
                   amount: netTotal,
                   netAmount: netTotal,
                   items,
@@ -2412,7 +2274,7 @@ export default function SalesInvoicePage() {
                   variant="outline"
                   color="#819E00"
                   onClick={() => {
-                    handlePrintInvoice({
+                    openPrintInvoiceDialog({
                       ...editInvoice,
                       netAmount: editNetAmount,
                     });
@@ -2436,6 +2298,53 @@ export default function SalesInvoicePage() {
               </Group>
             </>
           )}
+        </Modal>
+
+        <Modal
+          opened={printModalOpen}
+          onClose={() => {
+            setPrintModalOpen(false);
+            setInvoicePendingPrint(null);
+          }}
+          title="Print invoice"
+          size="sm"
+        >
+          <Radio.Group
+            value={printInvoiceKind}
+            onChange={(value) =>
+              setPrintInvoiceKind(value as InvoicePrintKind)
+            }
+            label="Invoice type"
+            description="Layout is the same; only the heading changes."
+          >
+            <Stack gap="xs" mt="xs">
+              <Radio value="sales" label="Sales Invoice" />
+              <Radio value="commercial" label="Commercial Invoice" />
+            </Stack>
+          </Radio.Group>
+          <Group justify="flex-end" mt="md">
+            <Button
+              variant="default"
+              onClick={() => {
+                setPrintModalOpen(false);
+                setInvoicePendingPrint(null);
+              }}
+            >
+              Cancel
+            </Button>
+            <Button
+              color="#0A6802"
+              onClick={() => {
+                if (invoicePendingPrint) {
+                  executeInvoicePrint(invoicePendingPrint, printInvoiceKind);
+                  setPrintModalOpen(false);
+                  setInvoicePendingPrint(null);
+                }
+              }}
+            >
+              Print
+            </Button>
+          </Group>
         </Modal>
 
         {/* Delete Invoice Modal */}
@@ -2698,15 +2607,23 @@ function InvoicePrintTemplate({ invoice }: { invoice: Invoice }) {
         >
           Total: PKR {invoice.amount?.toFixed(2)}
         </div>
-        <div style={{ marginTop: 18, pageBreakInside: "avoid" }}>
+        <div
+          style={{
+            marginTop: 18,
+            marginLeft: -24,
+            width: "calc(100% + 48px)",
+            pageBreakInside: "avoid",
+          }}
+        >
           <img
             src={getFooterImage(brand)}
             alt="Footer Banner"
             style={{
+              display: "block",
               width: "100%",
               height: "auto",
-              maxHeight: 120,
-              objectFit: "contain",
+              maxHeight: 140,
+              objectFit: "cover",
             }}
           />
         </div>

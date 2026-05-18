@@ -51,6 +51,29 @@ export function getNextInvoiceNumber(invoices: Invoice[] | unknown): string {
   return `INV-${next.toString().padStart(3, "0")}`;
 }
 
+/** Next purchase invoice number (PUR-001, PUR-002, …) from existing list. */
+export function getNextPurchaseInvoiceNumber(
+  invoices: { invoiceNumber?: string; number?: string }[] | unknown,
+): string {
+  const list = Array.isArray(invoices) ? invoices : [];
+  const numbers = list
+    .map((inv) => {
+      const raw =
+        (inv as { invoiceNumber?: string; number?: string })?.invoiceNumber ??
+        (inv as { number?: string })?.number ??
+        null;
+      const match =
+        typeof raw === "string" ? raw.match(/^PUR-(\d+)$/i) : null;
+      return match ? parseInt(match[1], 10) : null;
+    })
+    .filter((n): n is number => n !== null);
+  const max = numbers.length ? Math.max(...numbers) : 0;
+  const next = max + 1;
+  return `PUR-${next.toString().padStart(3, "0")}`;
+}
+
+import { createLineItemKey } from "./lineItemKey";
+
 export function mapRawToInvoice(invRaw: Record<string, unknown>): Invoice {
   const inv = invRaw || ({} as Record<string, unknown>);
 
@@ -93,7 +116,7 @@ export function mapRawToInvoice(invRaw: Record<string, unknown>): Invoice {
           ? String(item.id)
           : item._id !== undefined
             ? String(item._id)
-            : String(Math.random()),
+            : createLineItemKey(),
       code: String(item.code ?? ""),
       product,
       hsCode: String(item.hsCode ?? ""),

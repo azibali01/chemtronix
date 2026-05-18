@@ -334,14 +334,6 @@ function ProductsInner() {
         );
         console.log("Create product response:", response);
         if (response.data) {
-          const newProduct: Product = {
-            id:
-              response.data._id ||
-              response.data.id ||
-              `p-${Math.random().toString(36).slice(2, 8)}`,
-            ...response.data,
-          };
-          setProducts((prev) => [newProduct, ...prev]);
           notifications.show({
             title: "Success",
             message: "Product created successfully",
@@ -352,6 +344,7 @@ function ProductsInner() {
 
       setOpened(false);
       resetForm();
+      await fetchProducts();
     } catch (error: any) {
       notifications.show({
         title: "Error",

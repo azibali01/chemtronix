@@ -16,6 +16,7 @@ import type { AccountNode } from "../../Context/ChartOfAccountsContext";
 import { notifications } from "@mantine/notifications";
 import type { JSX } from "react/jsx-runtime";
 import { getHeaderImage, getFooterImage } from "../../../utils/assetPaths";
+import { getNextPurchaseInvoiceNumber } from "../../../utils/invoice";
 
 type Province = "Punjab" | "Sindh";
 
@@ -101,6 +102,132 @@ function extractError(error: unknown, fallback: string): string {
   return fallback;
 }
 
+/** Parse product code from select value e.g. "2 - CER" → 2 */
+function parseItemCode(code: string | number | undefined): number {
+  if (code == null || code === "") return 0;
+  if (typeof code === "number" && !Number.isNaN(code)) return code;
+  const m = String(code).match(/^\s*(\d+)/);
+  return m ? Number(m[1]) : Number(code) || 0;
+}
+
+function toIsoDateOnly(ymd: string | undefined): string | undefined {
+  if (!ymd?.trim()) return undefined;
+  const d = new Date(ymd.trim());
+  if (Number.isNaN(d.getTime())) return undefined;
+  return d.toISOString().slice(0, 10);
+}
+
+/** Map form state → CreatePurchaseInvoiceDto (backend whitelist). */
+function buildPurchaseInvoiceApiPayload(input: {
+  invoiceNumber: string;
+  date: string;
+  partyBillNo: string;
+  partyBillDate: string;
+  supplierNo: string;
+  supplierTitle: string;
+  purchaseAccount: string;
+  purchaseTitle: string;
+  items: Item[];
+  discount: number;
+}) {
+  const lineTotal = input.items.reduce(
+    (s, it) => s + (Number(it.qty) || 0) * (Number(it.rate) || 0),
+    0,
+  );
+  const supplierCode = parseItemCode(input.supplierNo);
+  const payload: Record<string, unknown> = {
+    ...(input.invoiceNumber.trim()
+      ? { invoiceNumber: input.invoiceNumber.trim() }
+      : {}),
+    invoiceDate: toIsoDateOnly(input.date) ?? new Date().toISOString().slice(0, 10),
+    supplier: {
+      name: input.supplierTitle.trim(),
+      code: supplierCode,
+    },
+    purchaseAccount: String(input.purchaseAccount ?? "").trim(),
+    purchaseTitle: String(input.purchaseTitle ?? "").trim(),
+    items: input.items.map((it) => ({
+      name: String(it.product ?? it.description ?? "Item").trim(),
+      price: Number(it.rate) || 0,
+      unit: Number(it.qty) || 0,
+      code: parseItemCode(it.code),
+    })),
+    totalAmount: Math.max(0, lineTotal - (Number(input.discount) || 0)),
+  };
+
+  const partyBillNumber = input.partyBillNo.trim();
+  if (partyBillNumber) payload.partyBillNumber = partyBillNumber;
+
+  const partyBillIso = toIsoDateOnly(input.partyBillDate);
+  if (partyBillIso) payload.partyBillDate = partyBillIso;
+
+  return payload;
+}
+
+function formatInvoiceListDate(value: string | undefined): string {
+  if (!value?.trim()) return "";
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return value.split("T")[0] ?? value;
+  return d.toISOString().slice(0, 10);
+}
+
+function mapPurchaseInvoiceFromApi(rRaw: unknown): Invoice {
+  const r = rRaw as Record<string, unknown>;
+  const itemsRaw = Array.isArray(r.items)
+    ? (r.items as unknown[])
+    : Array.isArray(r.products)
+      ? (r.products as unknown[])
+      : [];
+  const items = (itemsRaw as Record<string, unknown>[]).map((it, idx) => ({
+    id: (it.id ?? it._id ?? idx) as string | number,
+    code: String(it.code ?? it.productCode ?? it.sku ?? it.barcode ?? ""),
+    product: String(it.product ?? it.productName ?? it.name ?? it.title ?? ""),
+    description: String(it.description ?? it.productDescription ?? ""),
+    hsCode: String(it.hsCode ?? it.hs_code ?? ""),
+    qty: Number(it.qty ?? it.quantity ?? it.unit ?? 0),
+    rate: Number(it.rate ?? it.unitPrice ?? it.price ?? 0),
+  })) as Item[];
+
+  const supplier = r.supplier as Record<string, unknown> | undefined;
+
+  return {
+    id: (r.id ?? r._id ?? Date.now()) as string | number,
+    number: String(
+      r.invoiceNumber ??
+        r.number ??
+        r.invoiceNo ??
+        r.partyBillNumber ??
+        "",
+    ),
+    invoiceNumber: String(
+      r.invoiceNumber ??
+        r.number ??
+        r.invoiceNo ??
+        r.partyBillNumber ??
+        "",
+    ),
+    date: String(r.invoiceDate ?? r.date ?? r.invoice_date ?? ""),
+    supplierNo: String(
+      supplier?.code ?? supplier?.accountCode ?? r.supplierNo ?? "",
+    ),
+    supplierTitle: String(
+      supplier?.name ?? supplier?.accountName ?? r.supplierTitle ?? "",
+    ),
+    purchaseAccount: String(
+      r.purchaseAccount ?? r.purchase_account ?? "",
+    ),
+    purchaseTitle: String(r.purchaseTitle ?? r.purchase_title ?? ""),
+    items,
+    amount: Number(r.totalAmount ?? r.amount ?? 0),
+    ntnNo: String(r.ntnNo ?? r.ntn ?? ""),
+    partyBillNo: String(
+      r.partyBillNumber ?? r.partyBillNo ?? r.party_bill_no ?? "",
+    ),
+    partyBillDate: String(r.partyBillDate ?? r.party_bill_date ?? ""),
+    notes: String(r.notes ?? r.remarks ?? ""),
+  };
+}
+
 export default function PurchaseInvoice(): JSX.Element {
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const { accounts } = useChartOfAccounts() as { accounts: AccountNode[] };
@@ -116,7 +243,7 @@ export default function PurchaseInvoice(): JSX.Element {
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState<Invoice | null>(null);
 
-  const [invoiceNumber, setInvoiceNumber] = useState("PUR-001");
+  const [invoiceNumber, setInvoiceNumber] = useState("");
   const [date, setDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [supplierNo, setSupplierNo] = useState("");
   const [supplierTitle, setSupplierTitle] = useState("");
@@ -266,78 +393,9 @@ export default function PurchaseInvoice(): JSX.Element {
     try {
       const res = await api.get("/purchase-invoice/all-purchase-invoices");
       if (Array.isArray(res.data)) {
-        const mapped = (res.data as unknown[]).map((rRaw) => {
-          const r = rRaw as Record<string, unknown>;
-          const itemsRaw = Array.isArray(r.items)
-            ? (r.items as unknown[])
-            : Array.isArray(r.products)
-              ? (r.products as unknown[])
-              : [];
-          const items = (itemsRaw as Record<string, unknown>[]).map(
-            (itRaw, idx) => {
-              const it = itRaw as Record<string, unknown>;
-              return {
-                id: (it.id ?? it._id ?? idx) as string | number,
-                code: String(
-                  it.code ?? it.productCode ?? it.sku ?? it.barcode ?? "",
-                ),
-                product: String(
-                  it.product ?? it.productName ?? it.name ?? it.title ?? "",
-                ),
-                description: String(
-                  it.description ?? it.productDescription ?? "",
-                ),
-                hsCode: String(it.hsCode ?? it.hs_code ?? ""),
-                qty: Number(it.qty ?? it.quantity ?? 0),
-                rate: Number(it.rate ?? it.unitPrice ?? it.price ?? 0),
-              } as Item;
-            },
-          );
-          return {
-            id: (r.id ?? r._id ?? Date.now()) as string | number,
-            number: String(r.number ?? r.invoiceNumber ?? r.invoiceNo ?? ""),
-            date: String(r.date ?? r.invoiceDate ?? r.invoice_date ?? ""),
-            // typed supplier object
-            supplierNo: String(
-              (r.supplier as Record<string, unknown> | undefined)?.code ??
-                (r.supplier as Record<string, unknown> | undefined)
-                  ?.accountCode ??
-                r.supplierNo ??
-                "",
-            ),
-            supplierTitle: String(
-              (r.supplier as Record<string, unknown> | undefined)?.name ??
-                (r.supplier as Record<string, unknown> | undefined)
-                  ?.accountName ??
-                r.supplierTitle ??
-                "",
-            ),
-            purchaseAccount: String(
-              r.purchaseAccount ??
-                r.purchase_account ??
-                (r.supplier as Record<string, unknown> | undefined)
-                  ?.purchaseAccount ??
-                (r.supplier as Record<string, unknown> | undefined)
-                  ?.purchase_account ??
-                "",
-            ),
-            purchaseTitle: String(
-              r.purchase_account ??
-                (r.supplier as Record<string, unknown> | undefined)
-                  ?.purchaseTitle ??
-                (r.supplier as Record<string, unknown> | undefined)
-                  ?.purchase_title ??
-                "",
-            ),
-            items,
-            amount: Number(r.totalAmount ?? r.amount ?? 0),
-            ntnNo: String(r.ntnNo ?? r.ntn ?? ""),
-            partyBillNo: String(r.partyBillNo ?? r.party_bill_no ?? ""),
-            partyBillDate: String(r.partyBillDate ?? r.party_bill_date ?? ""),
-            notes: String(r.notes ?? r.remarks ?? ""),
-          } as Invoice;
-        });
-        setInvoices(mapped);
+        setInvoices(
+          (res.data as unknown[]).map((row) => mapPurchaseInvoiceFromApi(row)),
+        );
       }
     } catch (err) {
       console.error(err);
@@ -383,9 +441,7 @@ export default function PurchaseInvoice(): JSX.Element {
 
   const resetForm = () => {
     setEditing(null);
-    setInvoiceNumber(
-      `PUR-${(invoices.length + 1).toString().padStart(3, "0")}`,
-    );
+    setInvoiceNumber(getNextPurchaseInvoiceNumber(invoices));
     setDate(new Date().toISOString().slice(0, 10));
     setSupplierNo("");
     setSupplierTitle("");
@@ -426,12 +482,18 @@ export default function PurchaseInvoice(): JSX.Element {
         product: it.product ?? it.productName ?? it.name ?? it.title ?? "",
         description: it.description ?? it.productDescription ?? "",
         hsCode: it.hsCode ?? it.hs_code ?? "",
-        qty: Number(it.qty ?? it.quantity ?? 0),
+        qty: Number(it.qty ?? it.quantity ?? it.unit ?? 0),
         rate: Number(it.rate ?? it.unitPrice ?? it.price ?? 0),
       }),
     );
     const supplierObj = raw.supplier ?? raw.party ?? {};
-    setInvoiceNumber(raw.number ?? raw.invoiceNumber ?? raw.invoiceNo ?? "");
+    setInvoiceNumber(
+      raw.invoiceNumber ??
+        raw.number ??
+        raw.invoiceNo ??
+        raw.partyBillNumber ??
+        "",
+    );
     setDate(
       raw.date ??
         raw.invoiceDate ??
@@ -458,7 +520,9 @@ export default function PurchaseInvoice(): JSX.Element {
     );
     setNtnNo(raw.ntnNo ?? supplierObj.ntn ?? supplierObj.salesTaxNo ?? "");
     setDiscount(Number(raw.discount ?? 0));
-    setPartyBillNo(raw.partyBillNo ?? raw.party_bill_no ?? "");
+    setPartyBillNo(
+      String(raw.partyBillNumber ?? raw.partyBillNo ?? raw.party_bill_no ?? ""),
+    );
     setPartyBillDate(raw.partyBillDate ?? raw.party_bill_date ?? "");
     setItems(mapped);
     setNotes(raw.notes ?? raw.remarks ?? "");
@@ -636,24 +700,43 @@ export default function PurchaseInvoice(): JSX.Element {
 
   const save = async () => {
     try {
-      const payload = {
+      if (!purchaseAccount.trim() || !purchaseTitle.trim()) {
+        notifications.show({
+          title: "Validation",
+          message: "Purchase account and title are required.",
+          color: "red",
+        });
+        return;
+      }
+      if (!supplierTitle.trim() || !supplierNo) {
+        notifications.show({
+          title: "Validation",
+          message: "Supplier (purchase party) is required.",
+          color: "red",
+        });
+        return;
+      }
+      if (items.length === 0) {
+        notifications.show({
+          title: "Validation",
+          message: "Add at least one line item.",
+          color: "red",
+        });
+        return;
+      }
+
+      const payload = buildPurchaseInvoiceApiPayload({
         invoiceNumber,
-        invoiceDate: date,
+        date,
         partyBillNo,
         partyBillDate,
-        supplier: {
-          name: supplierTitle,
-          code: supplierNo,
-          purchaseAccount,
-          purchaseTitle,
-        },
+        supplierNo,
+        supplierTitle,
+        purchaseAccount,
+        purchaseTitle,
         items,
-        notes,
         discount,
-        totalAmount:
-          items.reduce((s, it) => s + (it.qty || 0) * (it.rate || 0), 0) -
-          (discount || 0),
-      };
+      });
       if (editing) {
         await api.put(
           `/purchase-invoice/update-purchase-invoice/${editing.id}`,
@@ -673,86 +756,7 @@ export default function PurchaseInvoice(): JSX.Element {
         });
       }
       setModalOpen(false);
-      try {
-        const res = await api.get("/purchase-invoice/all-purchase-invoices");
-        if (Array.isArray(res.data)) {
-          type RawInvoice = Record<string, unknown>;
-          const mapped = (res.data as unknown[]).map((r: unknown) => {
-            const obj = r as RawInvoice;
-            const id = (obj.id ?? obj._id ?? Date.now()) as string | number;
-            const number = (obj.number ??
-              obj.invoiceNumber ??
-              obj.invoiceNo ??
-              "") as string;
-            const date = (obj.date ??
-              obj.invoiceDate ??
-              obj.invoice_date ??
-              "") as string;
-            const supplierObj =
-              (obj.supplier as Record<string, unknown> | undefined) ??
-              undefined;
-            const supplierTitle =
-              (supplierObj && (supplierObj.name ?? supplierObj.accountName)) ??
-              obj.supplierTitle ??
-              "";
-            const supplierNo =
-              (supplierObj && (supplierObj.code ?? supplierObj.accountCode)) ??
-              obj.supplierNo ??
-              "";
-            const itemsRaw = Array.isArray(obj.items)
-              ? (obj.items as unknown[])
-              : Array.isArray(obj.products)
-                ? (obj.products as unknown[])
-                : [];
-            type RawItem = {
-              id?: string | number;
-              _id?: string | number;
-              code?: string;
-              productCode?: string;
-              sku?: string;
-              product?: string;
-              productName?: string;
-              name?: string;
-              description?: string;
-              productDescription?: string;
-              hsCode?: string;
-              hs_code?: string;
-              qty?: number;
-              quantity?: number;
-              rate?: number;
-              unitPrice?: number;
-              price?: number;
-            };
-            const items = (itemsRaw as RawItem[]).map(
-              (it: RawItem, idx: number) => {
-                return {
-                  id: it.id ?? it._id ?? idx,
-                  code: it.code ?? it.productCode ?? it.sku ?? "",
-                  product: it.product ?? it.productName ?? it.name ?? "",
-                  description: it.description ?? it.productDescription ?? "",
-                  hsCode: it.hsCode ?? it.hs_code ?? "",
-                  qty: Number(it.qty ?? it.quantity ?? 0),
-                  rate: Number(it.rate ?? it.unitPrice ?? it.price ?? 0),
-                };
-              },
-            );
-            const amount = (obj.totalAmount ?? obj.amount ?? 0) as number;
-
-            return {
-              id,
-              number,
-              date,
-              supplierTitle: String(supplierTitle),
-              supplierNo: String(supplierNo),
-              items,
-              amount,
-            } as Invoice;
-          });
-          setInvoices(mapped);
-        }
-      } catch (err) {
-        console.error(err);
-      }
+      await fetchInvoices();
     } catch (e) {
       console.error(e);
       const msg = (e as { response?: { data?: { message?: unknown } } })
@@ -803,8 +807,8 @@ export default function PurchaseInvoice(): JSX.Element {
         <Table.Tbody>
           {invoices.map((inv) => (
             <Table.Tr key={String(inv.id)}>
-              <Table.Td>{inv.invoiceNumber || inv.invoiceNumber}</Table.Td>
-              <Table.Td>{inv.date}</Table.Td>
+              <Table.Td>{inv.invoiceNumber ?? inv.number ?? ""}</Table.Td>
+              <Table.Td>{formatInvoiceListDate(inv.date)}</Table.Td>
               <Table.Td>{inv.supplierTitle}</Table.Td>
               <Table.Td>{inv.purchaseAccount || ""}</Table.Td>
               <Table.Td>{inv.purchaseTitle || ""}</Table.Td>
@@ -841,7 +845,10 @@ export default function PurchaseInvoice(): JSX.Element {
             <TextInput
               label="Invoice Number"
               value={invoiceNumber}
-              onChange={(e) => setInvoiceNumber(e.currentTarget.value)}
+              readOnly
+              description={
+                editing ? undefined : "Auto-generated (PUR-001, PUR-002, …)"
+              }
             />
             <TextInput
               label="Invoice Date"
