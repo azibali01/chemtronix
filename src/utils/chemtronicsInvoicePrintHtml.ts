@@ -1,8 +1,17 @@
 import type { CompanyTaxProfile } from "./assetPaths";
-import { getFooterImage, getHeaderImage } from "./assetPaths";
+import {
+  getInvoicePrintFooterImage,
+  getInvoicePrintHeaderImage,
+  resolvePrintAssetUrl,
+} from "./assetPaths";
 import type { Invoice, InvoiceItem } from "./invoice";
+import {
+  buildInvoicePrintHeaderHtml,
+  INVOICE_PRINT_HEADER_STYLES,
+} from "./invoicePrintHeader";
+import { buildSalesInvoicePrintHtml } from "./salesInvoicePrintHtml";
 
-export type InvoicePrintKind = "commercial" | "sales";
+export type InvoicePrintKind = "commercial" | "sales" | "gst";
 
 type AccountLike = {
   accountName?: string;
@@ -30,7 +39,9 @@ function getTaxRate(hsCode: string, province: "Punjab" | "Sindh") {
 }
 
 export function getInvoicePrintHeading(kind: InvoicePrintKind): string {
-  return kind === "commercial" ? "Commercial Invoice" : "Sales Invoice";
+  if (kind === "commercial") return "Commercial Invoice";
+  if (kind === "gst") return "Sales Tax Invoice";
+  return "Sale Invoice";
 }
 
 function escapeHtml(value: string): string {
@@ -46,6 +57,15 @@ function formatMoney(amount: number): string {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   });
+}
+
+/** Line-item amounts in PDF (7) use plain decimals without thousands separators. */
+function formatLineAmount(amount: number): string {
+  return amount.toFixed(2);
+}
+
+function getPoDateLabel(kind: InvoicePrintKind): string {
+  return kind === "commercial" ? "Po DateDate:" : "Po Date:";
 }
 
 function formatDateDdMmYyyy(dateStr?: string): string {
@@ -161,6 +181,8 @@ export type ChemtronicsInvoicePrintInput = {
   brand: string;
   company: CompanyTaxProfile;
   accounts?: AccountLike[];
+  /** e.g. window.location.origin — needed for header/footer images in blob print windows */
+  assetBaseUrl?: string;
 };
 
 export function buildChemtronicsInvoicePrintHtml({
@@ -169,7 +191,17 @@ export function buildChemtronicsInvoicePrintHtml({
   brand,
   company,
   accounts = [],
+  assetBaseUrl,
 }: ChemtronicsInvoicePrintInput): string {
+  if (kind === "sales") {
+    return buildSalesInvoicePrintHtml({
+      invoice,
+      brand,
+      accounts,
+      assetBaseUrl,
+    });
+  }
+
   const itemsList = invoice.items || [];
   const province = invoice.province || "Punjab";
   const subtotal = itemsList.reduce(
@@ -188,6 +220,7 @@ export function buildChemtronicsInvoicePrintHtml({
   const printHeading = getInvoicePrintHeading(kind);
   const companyNtn = escapeHtml((company.ntn || "").trim() || "—");
   const companyStrn = escapeHtml((company.strn || "").trim() || "—");
+  const showOriginalCopy = kind === "gst" || kind === "commercial";
   const customerAddress = escapeHtml(
     resolveCustomerAddress(invoice, accounts),
   );
@@ -206,7 +239,7 @@ export function buildChemtronicsInvoicePrintHtml({
         <td class="c">${gst.toFixed(2)}</td>
         <td class="r">${formatMoney(item.rate || 0)}</td>
         <td class="c">${(item.qty || 0).toFixed(2)}</td>
-        <td class="r">${formatMoney(net)}</td>
+        <td class="r">${formatLineAmount(net)}</td>
       </tr>`;
     })
     .join("");
@@ -227,8 +260,21 @@ export function buildChemtronicsInvoicePrintHtml({
     )
     .join("");
 
-  const headerImageUrl = getHeaderImage(brand);
-  const footerImageUrl = getFooterImage(brand);
+  const headerImageUrl = resolvePrintAssetUrl(
+    getInvoicePrintHeaderImage(brand),
+    assetBaseUrl,
+  );
+  const footerImageUrl = resolvePrintAssetUrl(
+    getInvoicePrintFooterImage(brand),
+    assetBaseUrl,
+  );
+  const docTitleClass =
+    kind === "gst"
+      ? "doc-title doc-title--gst"
+      : kind === "commercial"
+        ? "doc-title doc-title--commercial"
+        : "doc-title doc-title--sales";
+  const poDateLabel = getPoDateLabel(kind);
   const amountWords = numberToWords(Math.round(grandTotal));
   const printDateLong = formatLongPrintDate();
 
@@ -247,53 +293,88 @@ export function buildChemtronicsInvoicePrintHtml({
       font-size: 12px;
     }
     .page {
-      padding: 12px 20px 16px;
-      max-width: 210mm;
-      margin: 0 auto;
-    }
-    .header-img {
-      display: block;
       width: 100%;
-      height: auto;
-      object-fit: contain;
+      max-width: 100%;
+      margin: 0;
+      padding: 0 0 16px;
     }
-    .header-sub {
+    .page-body {
+      width: 100%;
+      padding: 0 6mm;
+      box-sizing: border-box;
+    }
+    ${INVOICE_PRINT_HEADER_STYLES}
+    .header-meta-row {
       display: flex;
       justify-content: space-between;
-      align-items: flex-start;
-      margin-top: 4px;
-      min-height: 44px;
+      align-items: center;
+      width: 100%;
+      padding: 2px 3.2% 8px 5.2%;
+      box-sizing: border-box;
+      gap: 12px;
     }
     .company-tax {
-      color: #0B4AA6;
-      font-weight: 700;
-      font-size: 13px;
-      line-height: 1.55;
+      flex: 0 0 auto;
       font-family: Arial, Helvetica, sans-serif;
+      font-size: 12px;
+      font-weight: 700;
+      line-height: 1.65;
+      color: #0B4AA6;
     }
-    .company-tax .lbl { font-weight: 700; }
+    .company-tax .tax-line {
+      display: block;
+      white-space: nowrap;
+    }
     .copy-marks {
+      flex: 0 0 auto;
+      margin-left: auto;
       border-collapse: collapse;
       font-family: Arial, Helvetica, sans-serif;
       font-size: 11px;
-      margin-top: 2px;
+      border: 1px solid #000;
     }
     .copy-marks td {
       border: 1px solid #000;
-      padding: 2px 8px;
       vertical-align: middle;
     }
-    .copy-marks .box {
-      width: 52px;
-      height: 18px;
+    .copy-marks .label-cell {
+      color: #0B4AA6;
+      font-weight: 700;
+      padding: 5px 12px 5px 10px;
+      text-align: left;
+      white-space: nowrap;
+    }
+    .copy-marks .box-cell {
+      width: 62px;
+      min-width: 62px;
+      height: 24px;
+      padding: 0;
+      background: #fff;
+    }
+    .header-rule {
+      border: none;
+      border-top: 1px solid #000;
+      margin: 0 3.2% 10px 3.2%;
+      width: auto;
     }
     .doc-title {
       text-align: center;
-      font-size: 26px;
       font-weight: 700;
-      margin: 10px 0 12px;
-      color: #000;
+      margin: 6px 0 6px;
       font-family: "Times New Roman", Times, Georgia, serif;
+      color: #000;
+    }
+    .doc-title--gst {
+      font-size: 26px;
+      margin: 8px 0 10px;
+      color: #000080;
+      text-decoration: underline;
+    }
+    .doc-title--commercial,
+    .doc-title--sales {
+      font-size: 22px;
+      text-decoration: none;
+      color: #000;
     }
     .details-box {
       border: 1px solid #000;
@@ -385,15 +466,19 @@ export function buildChemtronicsInvoicePrintHtml({
       margin-top: 4px;
       line-height: 1.35;
     }
+    .footer-banner {
+      margin-top: 18px;
+      width: 100%;
+      break-inside: avoid;
+      page-break-inside: avoid;
+    }
     .footer-img {
       display: block;
       width: 100%;
       height: auto;
-      max-height: 150px;
-      object-fit: cover;
-      margin-top: 14px;
+      min-width: 100%;
     }
-    .items-table, .bottom-wrap, .footer-img {
+    .items-table, .bottom-wrap, .footer-banner {
       break-inside: avoid;
       page-break-inside: avoid;
     }
@@ -401,21 +486,24 @@ export function buildChemtronicsInvoicePrintHtml({
 </head>
 <body>
   <div class="page">
-    <img class="header-img" src="${headerImageUrl}" alt="" />
+    ${buildInvoicePrintHeaderHtml(headerImageUrl)}
 
-    <div class="header-sub">
+    <div class="${docTitleClass}">${escapeHtml(printHeading)}</div>
+
+    <div class="header-meta-row">
       <div class="company-tax">
-        <div><span class="lbl">NTN:</span> ${companyNtn}</div>
-        <div><span class="lbl">STRN:</span> ${companyStrn}</div>
+        <span class="tax-line">NTN: ${companyNtn}</span>
+        <span class="tax-line">STRN: ${companyStrn}</span>
       </div>
       <table class="copy-marks">
-        <tr><td>Duplicate:</td><td class="box"></td></tr>
-        <tr><td>Triplicate:</td><td class="box"></td></tr>
+        ${showOriginalCopy ? "<tr><td class=\"label-cell\">Original:</td><td class=\"box-cell\">&nbsp;</td></tr>" : ""}
+        <tr><td class="label-cell">Duplicate:</td><td class="box-cell">&nbsp;</td></tr>
+        <tr><td class="label-cell">Triplicate:</td><td class="box-cell">&nbsp;</td></tr>
       </table>
     </div>
+    <hr class="header-rule" />
 
-    <div class="doc-title">${escapeHtml(printHeading)}</div>
-
+    <div class="page-body">
     <table class="details-box">
       <tr>
         <td>
@@ -430,7 +518,7 @@ export function buildChemtronicsInvoicePrintHtml({
           <div class="row"><span class="lbl">Delivery No:</span> ${escapeHtml(invoice.deliveryNumber || "")}</div>
           <div class="row"><span class="lbl">Delivery Date:</span> ${escapeHtml(formatDateDdMmYyyy(invoice.deliveryDate))}</div>
           <div class="row"><span class="lbl">Po No:</span> ${escapeHtml(invoice.poNumber || "")}</div>
-          <div class="row"><span class="lbl">Po Date:</span> ${escapeHtml(formatDateDdMmYyyy(invoice.poDate))}</div>
+          <div class="row"><span class="lbl">${poDateLabel}</span> ${escapeHtml(formatDateDdMmYyyy(invoice.poDate))}</div>
         </td>
       </tr>
     </table>
@@ -465,9 +553,161 @@ export function buildChemtronicsInvoicePrintHtml({
         <div class="words">${escapeHtml(amountWords)}</div>
       </div>
     </div>
+    </div>
 
-    <img class="footer-img" src="${footerImageUrl}" alt="" />
+    <div class="footer-banner">
+      <img class="footer-img" src="${footerImageUrl}" alt="Chemtronix footer" />
+    </div>
   </div>
 </body>
 </html>`;
+}
+
+/** Sample Commercial Invoice from rptGstInvoice (7).pdf (no API). */
+export function buildSampleCommercialInvoicePrintHtml(
+  brand: string,
+  assetBaseUrl?: string,
+): string {
+  const base =
+    assetBaseUrl ??
+    (typeof window !== "undefined" ? window.location.origin : "");
+  return buildChemtronicsInvoicePrintHtml({
+    invoice: sampleInvoiceFgsts459(),
+    kind: "commercial",
+    brand,
+    assetBaseUrl: base || undefined,
+    company: {
+      legalName: "Chemtronix Engineering Solution",
+      ntn: "C270254-2",
+      strn: "32-77-8763-241-63",
+    },
+    accounts: [
+      {
+        accountName: "AHMAD FINE WEAVING LIMITED (UNIT-II)",
+        address:
+          "Industrial Estate Link Road, Askari Bypass, Opp.P.C Hotal Multan",
+      },
+    ],
+  });
+}
+
+/** Sample GST / Sales Tax invoice (same layout as PDF 7, Sales Tax title). */
+export function buildSampleGstInvoicePrintHtml(
+  brand: string,
+  assetBaseUrl?: string,
+): string {
+  const base =
+    assetBaseUrl ??
+    (typeof window !== "undefined" ? window.location.origin : "");
+  return buildChemtronicsInvoicePrintHtml({
+    invoice: sampleInvoiceFgsts459(),
+    kind: "gst",
+    brand,
+    assetBaseUrl: base || undefined,
+    company: {
+      legalName: "Chemtronix Engineering Solution",
+      ntn: "C270254-2",
+      strn: "32-77-8763-241-63",
+    },
+    accounts: [
+      {
+        accountName: "AHMAD FINE WEAVING LIMITED (UNIT-II)",
+        address:
+          "Industrial Estate Link Road, Askari Bypass, Opp.P.C Hotal Multan",
+      },
+    ],
+  });
+}
+
+function sampleInvoiceFgsts459(): Invoice {
+  return {
+    id: "sample",
+    invoiceNumber: "FGSTS-459",
+    invoiceDate: "2025-08-04",
+    deliveryNumber: "14",
+    deliveryDate: "2025-07-31",
+    poNumber: "0120277170",
+    poDate: "2025-07-25",
+    accountTitle: "AHMAD FINE WEAVING LIMITED (UNIT-II)",
+    ntnNumber: "4099235-7",
+    strnNumber: "04-00-4099-235-18",
+    amount: 46067.2,
+    province: "Punjab",
+    items: [
+      {
+        id: "1",
+        code: "CEB-500",
+        product: "CEB-500",
+        hsCode: "3824",
+        description: "CEB-500",
+        qty: 32,
+        rate: 265,
+        exGSTRate: 0,
+        exGSTAmount: 0,
+      },
+      {
+        id: "2",
+        code: "CEB 511A",
+        product: "CEB 511A",
+        hsCode: "3824",
+        description: "CEB 511A",
+        qty: 32,
+        rate: 275,
+        exGSTRate: 0,
+        exGSTAmount: 0,
+      },
+      {
+        id: "3",
+        code: "CER-1122",
+        product: "CER-1122",
+        hsCode: "3824",
+        description: "CER-1122",
+        qty: 32,
+        rate: 390,
+        exGSTRate: 0,
+        exGSTAmount: 0,
+      },
+      {
+        id: "4",
+        code: "CEB-450",
+        product: "CEB-450",
+        hsCode: "3824",
+        description: "CEB-450",
+        qty: 32,
+        rate: 290,
+        exGSTRate: 0,
+        exGSTAmount: 0,
+      },
+    ],
+  };
+}
+
+export function openInvoicePrintPreview(
+  html: string,
+  options?: { autoPrint?: boolean },
+): boolean {
+  const blob = new Blob([html], { type: "text/html;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const w = window.open(url, "_blank", "noopener,noreferrer");
+  if (!w) {
+    URL.revokeObjectURL(url);
+    return false;
+  }
+  const cleanup = () => URL.revokeObjectURL(url);
+  if (options?.autoPrint !== false) {
+    w.addEventListener("load", () => {
+      cleanup();
+      setTimeout(() => {
+        try {
+          w.focus();
+          w.print();
+        } catch {
+          /* ignore */
+        }
+      }, 400);
+    });
+  } else {
+    w.addEventListener("load", cleanup);
+  }
+  return true;
 }

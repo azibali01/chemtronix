@@ -5,6 +5,7 @@ import ProtectedRoute from "../guards/ProtectedRoute";
 
 // Invoicing
 import SalesInvoice from "../Pages/Invoicing/SalesInvoice";
+import GstInvoicePrintDemo from "../Pages/Invoicing/GstInvoicePrintDemo";
 import PurchaseInvoice from "../Pages/Invoicing/PurchaseInvoice";
 import PurchaseReturns from "../Pages/Invoicing/PurchaseReturns";
 import CreditSaleInvoice from "../Pages/Invoicing/CreditSaleInvoice";
@@ -27,6 +28,7 @@ import Permissions from "../Pages/Company & Users/Permissions";
 
 // Ledger & Reports
 import GeneralLedger from "../Pages/Ledger&Reports/GeneralLedger";
+import AccountLedgerPrintDemo from "../Pages/Ledger&Reports/AccountLedgerPrintDemo";
 import SalesLedger from "../Pages/Ledger&Reports/SalesLedger";
 import PurchaseLedger from "../Pages/Ledger&Reports/PurchaseLedger";
 import AccountsReceivable from "../Pages/Ledger&Reports/AccountsReceivable";
@@ -73,6 +75,10 @@ const routes: RouteObject[] = [
 
           // Invoicing
           { path: "sales-invoice", element: <SalesInvoice /> },
+          {
+            path: "gst-invoice-print-design",
+            element: <GstInvoicePrintDemo />,
+          },
           { path: "purchase-invoice", element: <PurchaseInvoice /> },
           { path: "purchase-returns", element: <PurchaseReturns /> },
           { path: "credit-sale-invoice", element: <CreditSaleInvoice /> },
@@ -86,6 +92,10 @@ const routes: RouteObject[] = [
 
           // Ledger & Reports
           { path: "general-ledger", element: <GeneralLedger /> },
+          {
+            path: "account-ledger-print-design",
+            element: <AccountLedgerPrintDemo />,
+          },
           { path: "sales-ledger", element: <SalesLedger /> },
           { path: "purchase-ledger", element: <PurchaseLedger /> },
           { path: "accounts-receivable", element: <AccountsReceivable /> },

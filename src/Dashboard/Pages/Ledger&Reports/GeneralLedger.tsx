@@ -1,4 +1,5 @@
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
+import { Link } from "react-router";
 import { useChartOfAccounts } from "../../Context/ChartOfAccountsContext";
 import {
   Card,
@@ -13,6 +14,7 @@ import {
   Pagination,
   Stack,
   Switch,
+  Modal,
 } from "@mantine/core";
 import { notifications } from "@mantine/notifications";
 
@@ -24,9 +26,16 @@ import {
   IconSearch,
   IconCash,
   IconPrinter,
+  IconEye,
 } from "@tabler/icons-react";
 
 import api, { apiBaseURL } from "../../../api_configuration/api";
+import {
+  buildAccountLedgerPrintHtml,
+  buildSampleAccountLedgerPrintHtml,
+  openAccountLedgerPrintPreview,
+  type LedgerPrintRow,
+} from "../../../utils/accountLedgerPrintHtml";
 
 function formatLedgerDate(d: Date): string {
   return d.toLocaleDateString("en-GB", {
@@ -53,6 +62,13 @@ function fmtMoney(n: number): string {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   });
+}
+
+function formatLedgerPrintRowDate(dateSort: number): string {
+  const d = new Date(dateSort);
+  const day = String(d.getDate()).padStart(2, "0");
+  const mon = d.toLocaleString("en-GB", { month: "short" });
+  return `${day}-${mon}-${d.getFullYear()}`;
 }
 
 function isOpeningBalanceRow(entry: {
@@ -115,6 +131,8 @@ export default function GeneralLedger() {
   const [backendRows, setBackendRows] = useState<LedgerEntry[] | null>(null);
   /** B/F row from API (optional From date refines the anchor) */
   const [includeOpeningBalance, setIncludeOpeningBalance] = useState(false);
+  const [layoutPreviewOpen, setLayoutPreviewOpen] = useState(false);
+  const [layoutPreviewHtml, setLayoutPreviewHtml] = useState("");
 
   // Flatten Chart of Accounts for the account dropdown only (not shown as GL rows)
   useEffect(() => {
@@ -260,7 +278,7 @@ export default function GeneralLedger() {
     includeOpeningBalance,
   ]);
 
-  const fetchLedger = useCallback(async () => {
+  const fetchLedger = useCallback(async (opts?: { silent?: boolean }) => {
     const raw = account
       ? (accountOptions.find((e) => e.account === account)?.reference ??
           account)
@@ -315,11 +333,14 @@ export default function GeneralLedger() {
       setBackendRows(mapped);
     } catch {
       setBackendRows([]);
-      notifications.show({
-        title: "Error",
-        message: "Failed to fetch ledger entries from the server.",
-        color: "red",
-      });
+      if (!opts?.silent) {
+        notifications.show({
+          title: "Error",
+          message:
+            "Failed to fetch ledger entries. Start the backend (port 5174) or view the print design sample.",
+          color: "red",
+        });
+      }
     } finally {
       setLoading(false);
     }
@@ -332,10 +353,19 @@ export default function GeneralLedger() {
     openingScopeParam,
   ]);
 
-  // Auto-fetch on mount and whenever account or date filters change
+  const previewIframeRef = useRef<HTMLIFrameElement>(null);
+
   useEffect(() => {
-    fetchLedger();
-  }, [fetchLedger]);
+    if (!layoutPreviewOpen || !layoutPreviewHtml) return;
+    const el = previewIframeRef.current;
+    if (!el) return;
+    const blob = new Blob([layoutPreviewHtml], {
+      type: "text/html;charset=utf-8",
+    });
+    const url = URL.createObjectURL(blob);
+    el.src = url;
+    return () => URL.revokeObjectURL(url);
+  }, [layoutPreviewOpen, layoutPreviewHtml]);
 
   const totalPages = Math.max(1, Math.ceil(displayData.length / pageSize));
   useEffect(() => {
@@ -354,12 +384,99 @@ export default function GeneralLedger() {
         displayData[displayData.length - 1]!.runningBalanceRaw)
       : 0;
 
-  const printLedgerPdf = () => {
-    const selectedCode = account
-      ? accountOptions.find((e) => e.account === account)?.reference
-      : undefined;
+  const resolveSelectedAccount = () => {
+    if (!account) return null;
+    const pick = accountOptions.find((e) => e.account === account);
+    const raw = pick?.reference ?? "";
+    const accountNumber = raw.split("-")[0].trim();
+    return {
+      accountNumber,
+      accountName: account,
+    };
+  };
 
-    if (!selectedCode) {
+  const buildLedgerPrintHtml = (): string | null => {
+    const brand = localStorage.getItem("brand") ?? "chemtronics";
+    const selected = resolveSelectedAccount();
+
+    if (!selected) {
+      return null;
+    }
+    if (displayData.length === 0) {
+      return null;
+    }
+
+    const rows: LedgerPrintRow[] = displayData.map((entry) => {
+      const rb = entry.displayBalance ?? entry.runningBalanceRaw;
+      const side: "Dr" | "Cr" = rb >= 0 ? "Dr" : "Cr";
+      return {
+        date: formatLedgerPrintRowDate(entry.dateSort),
+        vchNo: entry.reference || "",
+        narration: entry.description || "",
+        debit: entry.debitAmount,
+        credit: entry.creditAmount,
+        balance: Math.abs(rb),
+        balanceSide: side,
+      };
+    });
+
+    return buildAccountLedgerPrintHtml({
+      brand,
+      accountNumber: selected.accountNumber,
+      accountName: selected.accountName,
+      fromDate,
+      toDate,
+      includeOpeningBalance,
+      rows,
+      totalDebit: totalDebits,
+      totalCredit: totalCredits,
+      endingBalance: endingRunning,
+    });
+  };
+
+  const openLayoutPreview = () => {
+    const html = buildLedgerPrintHtml();
+    if (!html) {
+      const brand = localStorage.getItem("brand") ?? "chemtronics";
+      notifications.show({
+        title: "No ledger data",
+        message:
+          "Select an account and click Apply Filter to load transactions, then preview again.",
+        color: "yellow",
+      });
+      setLayoutPreviewHtml(buildSampleAccountLedgerPrintHtml(brand));
+      setLayoutPreviewOpen(true);
+      return;
+    }
+    setLayoutPreviewHtml(html);
+    setLayoutPreviewOpen(true);
+  };
+
+  const printLedgerPreview = () => {
+    const html = buildLedgerPrintHtml();
+    if (!html) {
+      notifications.show({
+        title: "No ledger data",
+        message:
+          "Select an account and click Apply Filter to load real ledger rows before printing.",
+        color: "yellow",
+      });
+      return;
+    }
+    const opened = openAccountLedgerPrintPreview(html);
+    if (!opened) {
+      notifications.show({
+        title: "Popup blocked",
+        message:
+          "Allow popups for this site, or use Preview layout to view the report in the app.",
+        color: "yellow",
+      });
+    }
+  };
+
+  const printLedgerPdf = () => {
+    const selected = resolveSelectedAccount();
+    if (!selected) {
       notifications.show({
         title: "Select an Account",
         message:
@@ -369,6 +486,9 @@ export default function GeneralLedger() {
       return;
     }
 
+    const raw = accountOptions.find((e) => e.account === account)?.reference;
+    const selectedCode = raw ?? "";
+
     const params = new URLSearchParams();
     if (fromDate) params.set("startDate", fromDate.toISOString().split("T")[0]);
     if (toDate) params.set("endDate", toDate.toISOString().split("T")[0]);
@@ -376,7 +496,6 @@ export default function GeneralLedger() {
       params.set("includeOpeningBalance", "true");
     }
 
-    // Attach token + brand so the backend can authorise a plain browser navigation
     const token = localStorage.getItem("access_token") ?? "";
     const brand = localStorage.getItem("brand") ?? "chemtronics";
     params.set("token", token);
@@ -398,12 +517,35 @@ export default function GeneralLedger() {
         </Stack>
         <Group gap="xs">
           <Button
+            component={Link}
+            to="/dashboard/account-ledger-print-design"
+            color="#000080"
+            leftSection={<IconEye size={16} />}
+          >
+            View print design
+          </Button>
+          <Button
+            variant="light"
+            color="#000080"
+            leftSection={<IconEye size={16} />}
+            onClick={openLayoutPreview}
+          >
+            Preview layout
+          </Button>
+          <Button
+            color="#0A6802"
+            leftSection={<IconPrinter size={16} />}
+            onClick={printLedgerPreview}
+          >
+            Print Ledger
+          </Button>
+          <Button
             variant="outline"
             color="#000080"
             leftSection={<IconPrinter size={16} />}
             onClick={printLedgerPdf}
           >
-            Print Ledger PDF
+            Download PDF
           </Button>
         </Group>
       </Group>
@@ -556,7 +698,7 @@ export default function GeneralLedger() {
           <Button
             color="#0A6802"
             leftSection={<IconFilter size={16} />}
-            onClick={fetchLedger}
+            onClick={() => fetchLedger()}
             loading={loading}
           >
             Apply Filter
@@ -685,6 +827,46 @@ export default function GeneralLedger() {
           </Group>
         ) : null}
       </Card>
+
+      <Modal
+        opened={layoutPreviewOpen}
+        onClose={() => setLayoutPreviewOpen(false)}
+        title="Account ledger print preview"
+        size="90%"
+        styles={{ body: { paddingTop: 8 } }}
+      >
+        <Text size="sm" c="dimmed" mb="sm">
+          This matches your Account Ledger PDF layout. Use Print when ready.
+        </Text>
+        {layoutPreviewOpen ? (
+          <iframe
+            ref={previewIframeRef}
+            title="Account ledger preview"
+            style={{
+              width: "100%",
+              height: "min(70vh, 720px)",
+              border: "1px solid #ccc",
+              background: "#fff",
+            }}
+          />
+        ) : null}
+        <Group justify="flex-end" mt="md">
+          <Button variant="default" onClick={() => setLayoutPreviewOpen(false)}>
+            Close
+          </Button>
+          <Button
+            color="#0A6802"
+            leftSection={<IconPrinter size={16} />}
+            onClick={() => {
+              if (layoutPreviewHtml) {
+                openAccountLedgerPrintPreview(layoutPreviewHtml);
+              }
+            }}
+          >
+            Print
+          </Button>
+        </Group>
+      </Modal>
     </div>
   );
 }

@@ -1,0 +1,149 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Account Ledger Sample — Chemtronix</title>
+    <style>
+      @page { size: A4 portrait; margin: 12mm; }
+      * { box-sizing: border-box; }
+      body {
+        font-family: Arial, Helvetica, sans-serif;
+        font-size: 11px;
+        color: #000;
+        margin: 0;
+        padding: 16px 20px 24px;
+        background: #fff;
+      }
+      .banner {
+        background: #e8f4e8;
+        border: 1px solid #0a6802;
+        padding: 10px 14px;
+        margin-bottom: 16px;
+        border-radius: 6px;
+        font-size: 13px;
+      }
+      .company-header {
+        text-align: center;
+        margin-bottom: 4px;
+      }
+      .company-name {
+        font-size: 18px;
+        font-weight: 700;
+        color: #990000;
+        margin-bottom: 4px;
+      }
+      .company-line { margin-bottom: 2px; }
+      .report-title {
+        text-align: center;
+        font-size: 16px;
+        font-weight: 700;
+        color: #000080;
+        margin: 14px 0 8px;
+        text-decoration: underline;
+      }
+      .account-line { font-weight: 600; margin-bottom: 8px; }
+      .opening-flag { margin-bottom: 10px; }
+      table.ledger {
+        width: 100%;
+        border-collapse: collapse;
+        border: 1px solid #000;
+      }
+      table.ledger th,
+      table.ledger td {
+        border: 1px solid #000;
+        padding: 5px 6px;
+        vertical-align: top;
+      }
+      table.ledger thead th {
+        background: #d9d9d9;
+        color: #000080;
+        font-weight: 700;
+        text-align: center;
+      }
+      table.ledger .c { text-align: center; }
+      table.ledger .r { text-align: right; white-space: nowrap; }
+      tr.grand-total td {
+        background: #000080;
+        color: #fff;
+        font-weight: 700;
+      }
+      .footer {
+        margin-top: 12px;
+        display: flex;
+        justify-content: space-between;
+        font-size: 10px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="banner">
+      <strong>Sample layout</strong> — matches your Account Ledger PDF design.<br />
+      In the app: <strong>Dashboard → General Ledger</strong> → pick an account →
+      <strong>Preview layout</strong> or <strong>Print Ledger</strong>.
+    </div>
+
+    <div class="company-header">
+      <div class="company-name">Hydro Worx</div>
+      <div class="company-line">Bahawalpur Bypass Road, Multan</div>
+      <div class="company-line">061-6761611</div>
+    </div>
+
+    <div class="report-title">Account Ledger Report</div>
+
+    <div class="account-line">
+      Account: 14130 Qari Ahmad Shb. Baseer Pur Date From: 01/12/2023 To: 22/10/2025
+    </div>
+    <div class="opening-flag"><strong>Yes</strong> Opening Balance Included</div>
+
+    <table class="ledger">
+      <thead>
+        <tr>
+          <th>Date</th>
+          <th>VchNo</th>
+          <th>Narration</th>
+          <th>Debit</th>
+          <th>Credit</th>
+          <th>Balance</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td class="c">30-Nov-2023</td>
+          <td class="c">OB</td>
+          <td>Opening Balances</td>
+          <td class="r">23,200.00 Dr</td>
+          <td class="r"></td>
+          <td class="r">23,200.00 Dr</td>
+        </tr>
+        <tr>
+          <td class="c">03-Apr-2024</td>
+          <td class="c">SJV-253</td>
+          <td>Sale bill made SI-127 PO# :Verbal, Item: CRO 66A Rate:450 Qty:32</td>
+          <td class="r">17,150.00 Dr</td>
+          <td class="r"></td>
+          <td class="r">40,350.00 Dr</td>
+        </tr>
+        <tr>
+          <td class="c">09-May-2024</td>
+          <td class="c">SJV-337</td>
+          <td>Sale bill made SI-169 — Service Charges</td>
+          <td class="r">8,000.00 Dr</td>
+          <td class="r"></td>
+          <td class="r">48,350.00 Dr</td>
+        </tr>
+        <tr class="grand-total">
+          <td colspan="3">Grand Total:</td>
+          <td class="r">79,250.00</td>
+          <td class="r">0.00</td>
+          <td class="r">79,250.00 Dr</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="footer">
+      <span>Page 1 of 1</span>
+      <span>22/10/2025 3:33:46PM</span>
+    </div>
+  </body>
+</html>

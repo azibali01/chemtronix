@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, useMemo } from "react";
+import { Link } from "react-router";
 import { useBrand } from "../../Context/BrandContext";
 import {
   getHeaderImage,
@@ -28,7 +29,9 @@ import {
   IconPencil,
   IconSearch,
   IconDownload,
+  IconPrinter,
   IconX,
+  IconEye,
 } from "@tabler/icons-react";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
@@ -40,8 +43,14 @@ import { useDebounce } from "../../../hooks/useDebounce";
 import { createLineItemKey } from "../../../utils/lineItemKey";
 import {
   buildChemtronicsInvoicePrintHtml,
+  openInvoicePrintPreview,
   type InvoicePrintKind,
 } from "../../../utils/chemtronicsInvoicePrintHtml";
+import {
+  enrichInvoiceForPrint,
+  fetchSaleInvoiceForPrint,
+  isPersistedInvoiceId,
+} from "../../../utils/invoicePrintData";
 
 export interface InvoiceItem {
   id: string;
@@ -430,7 +439,7 @@ export default function SalesInvoicePage() {
   const [invoicePendingPrint, setInvoicePendingPrint] =
     useState<Invoice | null>(null);
   const [printInvoiceKind, setPrintInvoiceKind] =
-    useState<InvoicePrintKind>("sales");
+    useState<InvoicePrintKind>("gst");
 
   const [productCodes, setProductCodes] = useState<
     {
@@ -1051,48 +1060,59 @@ export default function SalesInvoicePage() {
     doc.save(`invoice_${invoice.invoiceNumber}.pdf`);
   };
 
-  const openPrintInvoiceDialog = (invoice: Invoice) => {
-    setInvoicePendingPrint(invoice);
-    setPrintInvoiceKind("sales");
+  const openPrintInvoiceDialog = async (
+    invoice: Invoice,
+    options?: { loadFromServer?: boolean },
+  ) => {
+    let inv = invoice;
+    if (options?.loadFromServer && isPersistedInvoiceId(invoice.id)) {
+      try {
+        inv = await fetchSaleInvoiceForPrint(invoice.id);
+      } catch (error) {
+        console.error("Failed to load invoice for print", error);
+        notifications.show({
+          title: "Could not load invoice",
+          message:
+            "Failed to fetch invoice details from the server. Try again after saving.",
+          color: "red",
+        });
+        return;
+      }
+    }
+    setInvoicePendingPrint(
+      enrichInvoiceForPrint(inv, accounts as AccountNode[]),
+    );
+    setPrintInvoiceKind("commercial");
     setPrintModalOpen(true);
   };
 
-  // Opens print window with Commercial or Sales heading (same layout)
   const executeInvoicePrint = (
     invoice: Invoice,
     kind: InvoicePrintKind = "sales",
   ) => {
-    // set a minimal current invoice for the hidden print template and trigger window.print()
-    // also store invoice into hidden print template state so DOM-based printing can use it
-    setCurrentInvoiceForPrint(invoice);
+    const enriched = enrichInvoiceForPrint(invoice, accounts as AccountNode[]);
+    setCurrentInvoiceForPrint(enriched);
     try {
       const company = resolveCompanyTaxProfile(brand, accounts);
       const html = buildChemtronicsInvoicePrintHtml({
-        invoice,
+        invoice: enriched,
         kind,
         brand,
         company,
         accounts,
+        assetBaseUrl: window.location.origin,
       });
 
-      const w = window.open("", "_blank");
-      if (!w) return;
-      w.document.open();
-      w.document.write(html);
-      w.document.close();
-      // allow the new window to render before calling print
-      setTimeout(() => {
-        try {
-          w.focus();
-          w.print();
-          // do not auto-close, let user decide
-          // clear hidden print template state after print attempt
-          setCurrentInvoiceForPrint(null);
-        } catch (e) {
-          setCurrentInvoiceForPrint(null);
-          console.error("Print failed", e);
-        }
-      }, 300);
+      const opened = openInvoicePrintPreview(html);
+      setCurrentInvoiceForPrint(null);
+      if (!opened) {
+        notifications.show({
+          title: "Popup blocked",
+          message:
+            "Allow popups or open View GST print design from the page header.",
+          color: "yellow",
+        });
+      }
     } catch (e) {
       setCurrentInvoiceForPrint(null);
       console.error("Print failed", e);
@@ -1245,14 +1265,25 @@ export default function SalesInvoicePage() {
           <Text size="xl" fw={600}>
             Sales Invoice
           </Text>
-          <Button
-            leftSection={<IconPlus size={16} />}
-            onClick={handleOpenCreateModal}
-            color="#0A6802"
-            disabled={invoicesLoading}
-          >
-            {invoicesLoading ? "Loading..." : "Create Invoice"}
-          </Button>
+          <Group gap="xs">
+            <Button
+              component={Link}
+              to="/dashboard/gst-invoice-print-design"
+              variant="light"
+              color="#000080"
+              leftSection={<IconEye size={16} />}
+            >
+              View invoice print design
+            </Button>
+            <Button
+              leftSection={<IconPlus size={16} />}
+              onClick={handleOpenCreateModal}
+              color="#0A6802"
+              disabled={invoicesLoading}
+            >
+              {invoicesLoading ? "Loading..." : "Create Invoice"}
+            </Button>
+          </Group>
         </Group>
 
         <Group grow>
@@ -1446,6 +1477,18 @@ export default function SalesInvoicePage() {
                           onClick={() => setDeleteInvoice(i)}
                         >
                           <IconTrash size={16} />
+                        </ActionIcon>
+                        <ActionIcon
+                          color="#819E00"
+                          variant="light"
+                          onClick={() =>
+                            void openPrintInvoiceDialog(i, {
+                              loadFromServer: true,
+                            })
+                          }
+                          title="Print invoice"
+                        >
+                          <IconPrinter size={16} />
                         </ActionIcon>
                         <ActionIcon
                           color="#819E00"
@@ -1856,16 +1899,18 @@ export default function SalesInvoicePage() {
               variant="outline"
               color="#819E00"
               onClick={() => {
-                openPrintInvoiceDialog({
+                void openPrintInvoiceDialog({
                   id: String(invoices.length + 1),
                   invoiceNumber: newInvoiceNumber,
                   invoiceDate: newInvoiceDate,
                   accountTitle: newAccountTitle,
+                  accountNumber: newAccountNumber,
                   ntnNumber: newNtnNumber,
                   strnNumber: newStrnNumber,
                   deliveryNumber: newDeliveryNumber,
                   deliveryDate: newDeliveryDate,
                   poNumber: newPoNumber,
+                  poDate: newPoDate,
                   province,
                   amount: netTotal,
                   netAmount: netTotal,
@@ -2274,10 +2319,14 @@ export default function SalesInvoicePage() {
                   variant="outline"
                   color="#819E00"
                   onClick={() => {
-                    openPrintInvoiceDialog({
-                      ...editInvoice,
-                      netAmount: editNetAmount,
-                    });
+                    void openPrintInvoiceDialog(
+                      {
+                        ...editInvoice,
+                        netAmount: editNetAmount,
+                        items: editInvoice.items ?? [],
+                      },
+                      { loadFromServer: false },
+                    );
                   }}
                   mr={8}
                 >
@@ -2315,11 +2364,12 @@ export default function SalesInvoicePage() {
               setPrintInvoiceKind(value as InvoicePrintKind)
             }
             label="Invoice type"
-            description="Layout is the same; only the heading changes."
+            description="Sale Invoice (PDF 8), Commercial, or Sales Tax (GST) — each has its own layout."
           >
             <Stack gap="xs" mt="xs">
-              <Radio value="sales" label="Sales Invoice" />
+              <Radio value="gst" label="Sales Tax Invoice (GST)" />
               <Radio value="commercial" label="Commercial Invoice" />
+              <Radio value="sales" label="Sale Invoice (no GST columns)" />
             </Stack>
           </Radio.Group>
           <Group justify="flex-end" mt="md">

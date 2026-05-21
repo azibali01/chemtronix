@@ -9,6 +9,32 @@ export function getFooterImage(brand: string): string {
   return brand === "hydroworx" ? "/hydroworx-footer.jpeg" : "/Footer.jpeg";
 }
 
+/** Header/footer from rptGstInvoice (7).pdf — used for invoice print HTML. */
+export function getInvoicePrintHeaderImage(brand: string): string {
+  return brand === "hydroworx"
+    ? "/Hydroworx-header.jpeg"
+    : "/Invoice-header-v7.png";
+}
+
+export function getInvoicePrintFooterImage(brand: string): string {
+  return brand === "hydroworx"
+    ? "/hydroworx-footer.jpeg"
+    : "/Invoice-footer-v7.png";
+}
+
+/** Absolute URL for print HTML (required when opening via blob: window). */
+export function resolvePrintAssetUrl(
+  assetPath: string,
+  baseUrl?: string,
+): string {
+  if (/^https?:\/\//i.test(assetPath)) return assetPath;
+  const base =
+    baseUrl ??
+    (typeof window !== "undefined" ? window.location.origin : "");
+  if (!base) return assetPath;
+  return `${base.replace(/\/$/, "")}${assetPath.startsWith("/") ? assetPath : `/${assetPath}`}`;
+}
+
 export type CompanyTaxProfile = {
   legalName: string;
   ntn: string;
@@ -33,7 +59,7 @@ export function getCompanyTaxProfile(brand: string): CompanyTaxProfile {
 
 /** Full-bleed footer image (matches header breakout from page padding). */
 export const INVOICE_PRINT_FOOTER_STYLE =
-  "display:block;width:100%;height:auto;max-height:140px;object-fit:cover;";
+  "display:block;width:100%;height:auto;max-height:140px;object-fit:contain;";
 
 export const INVOICE_PRINT_FOOTER_WRAP_STYLE =
   "margin-top:18px;margin-left:-24px;width:calc(100% + 48px);break-inside:avoid;page-break-inside:avoid;";
